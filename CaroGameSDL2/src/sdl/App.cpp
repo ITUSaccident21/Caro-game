@@ -299,7 +299,20 @@ void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appSta
 
 void App_OnEvent_LoadGame(const SDL_Event& e, _GAMESTATE& state, AppState& appState) {
     AppState next = UIManager_HandleLoadEvent(e, state);
-    if (next != STATE_LOAD_GAME) {
+    if (next == STATE_PLAYING) {
+        // Game đã được load vào state — chỉ reset runtime state, KHÔNG xóa board
+        state.aiThinking = false;
+        state.hoveredRow = BOARD_SIZE / 2;
+        state.hoveredCol = BOARD_SIZE / 2;
+        Animation_Reset();
+        WinEffect_Reset();
+        if (state.gameStatus != CHUA_KET_THUC)
+            UIManager_ShowResult(state, state.gameStatus);
+        else
+            UIManager_HideResult();
+        appState = STATE_PLAYING;
+        AudioManager_PlayBGM("assets/sounds/game_bgm.ogg");
+    } else if (next != STATE_LOAD_GAME) {
         App_TransitionTo(next, appState, state);
     }
 }

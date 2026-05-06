@@ -41,8 +41,10 @@ void InitSaveFolder() {
 
 std::vector<std::string> GetSaveFiles() {
     std::vector<std::string> files;
+    if (!std::filesystem::exists("Saves")) return files;
     for (const auto& entry : std::filesystem::directory_iterator("Saves")) {
-        files.push_back(entry.path().stem().string());
+        if (entry.path().extension() == ".dat")
+            files.push_back(entry.path().stem().string());
     }
     return files;
 }
