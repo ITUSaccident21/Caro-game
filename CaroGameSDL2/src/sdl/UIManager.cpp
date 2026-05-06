@@ -115,6 +115,15 @@ void UIManager_Shutdown() {
     s_renderer = nullptr;
 }
 
+void UIManager_RenderText(SDL_Renderer* r, const char* text,
+                          int x, int y, SDL_Color color,
+                          bool center, int fontSize) {
+    TTF_Font* f = (fontSize >= 2) ? s_fontLg
+                : (fontSize == 1) ? s_fontMd
+                :                   s_fontSm;
+    RT(r, f, text, x, y, color, center);
+}
+
 // ── Menu ─────────────────────────────────────────────────────────
 void UIManager_ShowMenu() {
     s_menuSel    = 0;

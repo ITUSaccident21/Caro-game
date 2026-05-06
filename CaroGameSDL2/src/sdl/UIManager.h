@@ -39,3 +39,9 @@ void UIManager_ShowSaveDialog(_GAMESTATE& state);
 void UIManager_ShowResult(const _GAMESTATE& state, int result);
 void UIManager_RenderResult(SDL_Renderer* renderer);
 void UIManager_HideResult();   // gọi khi bắt đầu ván mới trong cùng session
+
+// ── Text helper dùng chung (vd. WinEffect) ──────────────────────
+// fontSize: 0=16pt, 1=22pt, 2=34pt
+void UIManager_RenderText(SDL_Renderer* r, const char* text,
+                          int x, int y, SDL_Color color,
+                          bool center, int fontSize);

@@ -151,6 +151,15 @@ void Renderer_DrawHover(SDL_Renderer* r, const _GAMESTATE& state) {
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 }
 
+// ── Public symbol drawing ─────────────────────────────────────────
+void Renderer_DrawSymbolX(SDL_Renderer* r, int cx, int cy, int half, int thickness) {
+    DrawX(r, cx, cy, half, thickness);
+}
+
+void Renderer_DrawSymbolO(SDL_Renderer* r, int cx, int cy, int radius, int thickness) {
+    DrawO(r, cx, cy, radius, thickness);
+}
+
 // ── Win cells blink (4Hz) ─────────────────────────────────────────
 void Renderer_DrawWinCells(SDL_Renderer* r, const _GAMESTATE& state) {
     if (state.gameStatus == CHUA_KET_THUC || state.gameStatus == HOA) return;

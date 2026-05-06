@@ -3,6 +3,7 @@
 #include "AudioManager.h"
 #include "UIManager.h"
 #include "Animation.h"
+#include "WinEffect.h"
 #include "../game/Model.h"
 #include "../game/FileHandling.h"
 #include "../ai/AIPlayer.h"
@@ -160,13 +161,16 @@ void App_Render(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
         break;
 
     case STATE_PLAYING:
-        // Thứ tự layers: background → board → pieces → hover → character → HUD
         Renderer_DrawBackground(ctx.renderer);
         Renderer_DrawBoard(ctx.renderer, state);
         Renderer_DrawPieces(ctx.renderer, state);
+        // Nhấp nháy ô thắng chỉ khi WinEffect chưa chạy
+        if (!WinEffect_IsPlaying())
+            Renderer_DrawWinCells(ctx.renderer, state);
         Renderer_DrawHover(ctx.renderer, state);
         Animation_Render(ctx.renderer, state);
         UIManager_RenderHUD(ctx.renderer, state);
+        WinEffect_Render(ctx.renderer);     // overlay phủ lên cùng
         break;
 
     case STATE_LOAD_GAME:
@@ -185,12 +189,12 @@ void App_Update_Menu(float dt, _GAMESTATE& state) {
 }
 
 void App_Update_Playing(float dt, _GAMESTATE& state, AppState& appState) {
-    // Cập nhật animation nhân vật
     Animation_Update(dt, state);
+    WinEffect_Update(dt);
 
     // Nếu là lượt AI, animation đã xong, game chưa kết thúc
     if (state.mode == MODE_PVE
-        && state.turn == false              // false = Player 2 = AI
+        && state.turn == false
         && !state.aiThinking
         && !Animation_IsPlaying()
         && state.gameStatus == CHUA_KET_THUC) {
@@ -214,8 +218,8 @@ void App_OnEvent_NameInput(const SDL_Event& e, _GAMESTATE& state, AppState& appS
 }
 
 void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appState) {
-    // Khóa input khi animation đang chạy hoặc AI đang tính
-    if (Animation_IsPlaying() || state.aiThinking) return;
+    // Khóa input khi animation đang chạy, AI đang tính, hoặc WinEffect chưa xong
+    if (Animation_IsPlaying() || state.aiThinking || WinEffect_IsAnimating()) return;
 
     // ESC và R luôn hoạt động kể cả khi game kết thúc
     if (e.type == SDL_KEYDOWN) {
@@ -254,10 +258,10 @@ void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appSta
         int row, col;
         if (App_PixelToCell(e.button.x, e.button.y, row, col)) {
             if (state._BOARD[row][col].c == 0) {
-                // Trigger animation đi đến ô — board chỉ được ghi khi animation xong
                 state.selectedRow = row;
                 state.selectedCol = col;
-                Animation_StartMove(state, row, col, 0);
+                int charIdx = state.turn ? 0 : 1;
+                Animation_StartMove(state, row, col, charIdx);
                 AudioManager_PlaySFX(SFX_MOVE);
             }
         }
@@ -278,7 +282,8 @@ void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appSta
             if (r >= 0 && c >= 0 && state._BOARD[r][c].c == 0) {
                 state.selectedRow = r;
                 state.selectedCol = c;
-                Animation_StartMove(state, r, c, 0);
+                int charIdx = state.turn ? 0 : 1;
+                Animation_StartMove(state, r, c, charIdx);
                 AudioManager_PlaySFX(SFX_MOVE);
             }
             break;
@@ -333,7 +338,8 @@ void App_PlacePiece(_GAMESTATE& state, int row, int col) {
     if (result == P1_THANG || result == P2_THANG) {
         Animation_StartCelebrate(state, state.turn ? 0 : 1);
         AudioManager_PlaySFX(SFX_WIN);
-        UIManager_ShowResult(state, result);
+        WinEffect_Start(state);
+        UIManager_ShowResult(state, result);  // hiện hint R/ESC trên panel sau khi WinEffect kết thúc
     }
     else if (result == HOA) {
         AudioManager_PlaySFX(SFX_DRAW);
@@ -371,6 +377,7 @@ void App_StartNewGame(_GAMESTATE& state) {
     state.gameStatus = CHUA_KET_THUC;
     state.aiThinking = false;
     Animation_Reset();
+    WinEffect_Reset();
 }
 
 void App_StartNewSession(_GAMESTATE& state) {
@@ -380,6 +387,7 @@ void App_StartNewSession(_GAMESTATE& state) {
     state.gameStatus = CHUA_KET_THUC;
     state.aiThinking = false;
     Animation_Reset();
+    WinEffect_Reset();
     UIManager_HideResult();
 }
 

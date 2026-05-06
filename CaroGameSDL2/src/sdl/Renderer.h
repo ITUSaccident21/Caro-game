@@ -24,3 +24,8 @@ void Renderer_DrawHover(SDL_Renderer* renderer, const _GAMESTATE& state);
 
 // Layer 5: Hiệu ứng nhấp nháy 5 ô chiến thắng
 void Renderer_DrawWinCells(SDL_Renderer* renderer, const _GAMESTATE& state);
+
+// Primitive ký hiệu — dùng bởi WinEffect để vẽ lại có scale tùy ý
+// Màu do caller set trước bằng SDL_SetRenderDrawColor
+void Renderer_DrawSymbolX(SDL_Renderer* r, int cx, int cy, int half, int thickness);
+void Renderer_DrawSymbolO(SDL_Renderer* r, int cx, int cy, int radius, int thickness);
