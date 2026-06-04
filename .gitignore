@@ -1,33 +1,60 @@
-# Build folders
+# ================================================================
+#  .gitignore — CaroGame SDL2 (Gomoku)
+#  Chỉ push source code + assets + docs
+#  Loại bỏ: build output, user settings, cache, raw asset packs
+# ================================================================
+
+# ── Build output ────────────────────────────────────────────────
 x64/
 X64/
-build/
-Build/
-*.sln
-*.slnx
+Debug/
+Release/
+*.exe
+*.pdb
+*.obj
+*.idb
+*.ilk
+*.lib
+*.exp
+*.dll
 
-# Visual Studio
+# ── Visual Studio user-specific (không share) ───────────────────
 .vs/
-.vscode/
-*.vcxproj
 *.vcxproj.user
-*.vcxproj.filters
+*.aps
 
-# CMake
+# ── VS Code ─────────────────────────────────────────────────────
+.vscode/
+
+# ── CMake ───────────────────────────────────────────────────────
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
 
-# Executables
-*.exe
-*.out
+# ── Game save data (user-generated) ─────────────────────────────
+Saves/
+*/Saves/
 
-# OS specific
+# ── Raw open-source asset packs (quá lớn, không phải code) ──────
+source_assets/
+
+# ── Demo / Screenshots cá nhân ──────────────────────────────────
+Demo/
+
+# ── Generated log files ─────────────────────────────────────────
+Log/*.log
+
+# ── Private AI config ───────────────────────────────────────────
+.claude/
+
+# ── Thư mục tạm ─────────────────────────────────────────────────
+tham kh*o/
+styles/
+
+# ── OS specific ─────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
-
-# Editor backup files
 *.swp
 *.swo
 *~
