@@ -1,52 +1,50 @@
-#include "App.h"
-#include "Renderer.h"
-#include "AudioManager.h"
-#include "UIManager.h"
-#include "Animation.h"
-#include "WinEffect.h"
-#include "../game/Model.h"
-#include "../game/FileHandling.h"
-#include "../ai/AIPlayer.h"
+#include "sdl/App.h"
+#include "sdl/Fade.h"
+#include "sdl/Renderer.h"
+#include "sdl/AudioManager.h"
+#include "sdl/UIManager.h"
+#include "sdl/HarvestResult.h"
+#include "sdl/Particle.h"
+#include "game/Model.h"
+#include "game/FileHandling.h"
+#include "ai/AIPlayer.h"
+#include "ai/AIWorker.h"
 #include <SDL.h>
 #include <SDL_image.h>
 #include <SDL_ttf.h>
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>
 #include <ctime>
-#include <future>
-#include <chrono>
 
-static std::future<Move> s_aiFuture;
+static int   s_lastHoverSfxRow = -2;
+static int   s_lastHoverSfxCol = -2;
+static float s_turnDelay       = 0.0f;
+static const float TURN_DELAY_S = 0.42f;
 
-// ================================================================
-//  App.cpp — Vòng lặp chính SDL2, hoàn toàn thủ tục
-//  Không class, không method. Chỉ free functions.
-// ================================================================
-
-// ─── Hằng số vòng lặp ────────────────────────────────────────────
-static const float FIXED_STEP = 1.0f / FPS;   // ~0.01667s
+static const float FIXED_STEP = 1.0f / FPS;
 
 // ─── App_Init ────────────────────────────────────────────────────
 bool App_Init(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
-    // 1. Khởi tạo SDL2
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         SDL_Log("SDL_Init that bai: %s", SDL_GetError());
         return false;
     }
 
-    // 2. Tạo cửa sổ
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+
     ctx.window = SDL_CreateWindow(
         "Co Caro — Gomoku",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        WINDOW_WIDTH, WINDOW_HEIGHT,
-        SDL_WINDOW_SHOWN
+        0, 0,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN_DESKTOP
     );
     if (!ctx.window) {
         SDL_Log("SDL_CreateWindow that bai: %s", SDL_GetError());
         return false;
     }
 
-    // 3. Tạo renderer (hardware accelerated + vsync)
     ctx.renderer = SDL_CreateRenderer(ctx.window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_TARGETTEXTURE);
     if (!ctx.renderer) {
@@ -54,24 +52,23 @@ bool App_Init(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
         return false;
     }
 
-    // 4. Khởi tạo các subsystem theo thứ tự phụ thuộc
+    SDL_RenderSetLogicalSize(ctx.renderer, WINDOW_WIDTH, WINDOW_HEIGHT);
+
     if (!Renderer_Init(ctx.renderer))  return false;
     Renderer_CreatePieceTextures(ctx.renderer);
+    HarvestResult_Init(ctx.renderer);
     if (!AudioManager_Init())          return false;
     if (!UIManager_Init(ctx.renderer)) return false;
-    Animation_Init();
+    Particle_Init(ctx.renderer);
 
-    // 5. Dữ liệu game ban đầu
     ResetData(state);
-    // Tên mặc định — UIManager sẽ ghi đè khi user nhập qua STATE_NAME_INPUT
     strcpy_s(state.players[0].name, sizeof(state.players[0].name), "Player 1");
     strcpy_s(state.players[1].name, sizeof(state.players[1].name), "Player 2");
     state.hoveredRow = BOARD_SIZE / 2;
     state.hoveredCol = BOARD_SIZE / 2;
     state.gameStatus = CHUA_KET_THUC;
 
-    // 6. Bắt đầu từ splash screen, BGM sẽ phát sau khi vào menu
-    srand(static_cast<unsigned>(time(nullptr)));  // seed random cho board skin
+    srand(static_cast<unsigned>(time(nullptr)));
     appState = STATE_SPLASH;
     ctx.running = true;
     ctx.prevTicks = SDL_GetTicks64();
@@ -86,29 +83,28 @@ void App_Run(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
         float dt = (now - ctx.prevTicks) / 1000.0f;
         ctx.prevTicks = now;
 
-        // Giới hạn dt: tránh "spiral of death" khi bị lag
         if (dt > 0.25f) dt = 0.25f;
         ctx.accumulator += dt;
 
-        // Xử lý events mỗi frame (không phụ thuộc timestep)
         App_HandleEvents(ctx, state, appState);
 
-        // Logic update theo bước cố định
         while (ctx.accumulator >= FIXED_STEP) {
             App_Update(FIXED_STEP, state, appState);
             ctx.accumulator -= FIXED_STEP;
         }
 
-        // Render
         App_Render(ctx, state, appState);
     }
 }
 
 // ─── App_Shutdown ────────────────────────────────────────────────
 void App_Shutdown(AppContext& ctx) {
-    Animation_Shutdown();
+    AIWorker_Shutdown();
+
+    Particle_Shutdown();
     UIManager_Shutdown();
     AudioManager_Shutdown();
+    HarvestResult_Shutdown();
     Renderer_DestroyPieceTextures();
     Renderer_Shutdown();
 
@@ -123,19 +119,22 @@ void App_Shutdown(AppContext& ctx) {
     SDL_Quit();
 }
 
-// ─── App_HandleEvents ────────────────────────────────────────────
 void App_HandleEvents(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        // Thoát bất kể đang ở state nào
+
         if (e.type == SDL_QUIT) {
             ctx.running = false;
             return;
         }
 
-        // Routing đến handler của state hiện tại
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F6) {
+            Renderer_CyclePieceReadability();
+            continue;
+        }
+
         switch (appState) {
-        case STATE_SPLASH:      // bất kỳ phím/click nào → bỏ qua splash
+        case STATE_SPLASH:
             if (e.type==SDL_KEYDOWN || e.type==SDL_MOUSEBUTTONDOWN)
                 App_TransitionTo(STATE_MENU, appState, state);
             break;
@@ -149,8 +148,8 @@ void App_HandleEvents(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
     }
 }
 
-// ─── App_Update ──────────────────────────────────────────────────
 void App_Update(float dt, _GAMESTATE& state, AppState& appState) {
+    Fade_Update(dt, appState, state);
     switch (appState) {
     case STATE_SPLASH:  App_Update_Splash(dt, state, appState);    break;
     case STATE_MENU:    App_Update_Menu(dt, state, appState);      break;
@@ -159,21 +158,44 @@ void App_Update(float dt, _GAMESTATE& state, AppState& appState) {
     }
 }
 
-// ─── App_Render ──────────────────────────────────────────────────
+// Layer-ordered compositing for STATE_PLAYING. [paint #N] = real draw order.
+
+static void App_RenderMatchScene(AppContext& ctx, _GAMESTATE& state) {
+    SDL_Renderer* r = ctx.renderer;
+
+    Renderer_DrawMatchBackground(r);
+    Renderer_DrawBoard(r);
+    Renderer_DrawPieces(r, state);
+    Renderer_DrawMarkers(r, state);
+
+    Particle_Render(r);
+
+    Renderer_DrawForeground(r);
+
+    UIManager_RenderHUD(r, state);
+    HarvestResult_Render(r, state);
+
+    if (Renderer_IsPieceDebugShown()) {
+        char dbg[48];
+        std::snprintf(dbg, sizeof(dbg), "PIECE: %s", Renderer_GetPieceReadabilityName());
+        SDL_Color c = { 255, 0, 255, 255 };
+        UIManager_RenderText(r, dbg, WINDOW_WIDTH / 2, 100, c, true, 1);
+    }
+
+    UIManager_RenderPauseOverlay(r);
+    UIManager_RenderSaveNameDialog(r);
+}
+
 void App_Render(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
-    // Splash tự vẽ nền riêng; tất cả state còn lại dùng Renderer_DrawBackground
+    UIManager_BeginFrame();
     if (appState == STATE_SPLASH) {
         UIManager_RenderSplash(ctx.renderer);
         SDL_RenderPresent(ctx.renderer);
         return;
     }
 
-    // Clear trước để tránh frame đen khi chuyển state
     SDL_SetRenderDrawColor(ctx.renderer, 0, 0, 0, 255);
     SDL_RenderClear(ctx.renderer);
-
-    bool isGame = (appState == STATE_PLAYING);
-    Renderer_DrawBackground(ctx.renderer, isGame);
 
     switch (appState) {
     case STATE_MENU:
@@ -185,16 +207,7 @@ void App_Render(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
         break;
 
     case STATE_PLAYING:
-        Renderer_DrawBoard(ctx.renderer, state);
-        Renderer_DrawPieces(ctx.renderer, state);
-        if (!WinEffect_IsPlaying())
-            Renderer_DrawWinCells(ctx.renderer, state);
-        Renderer_DrawHover(ctx.renderer, state);
-        Animation_Render(ctx.renderer, state);
-        UIManager_RenderHUD(ctx.renderer, state);
-        UIManager_RenderGameHeader(ctx.renderer, state);  // header bar phía trên
-        WinEffect_Render(ctx.renderer);
-        UIManager_RenderPauseOverlay(ctx.renderer);        // pause overlay — layer trên cùng
+        App_RenderMatchScene(ctx, state);
         break;
 
     case STATE_SETTINGS:
@@ -208,10 +221,10 @@ void App_Render(AppContext& ctx, _GAMESTATE& state, AppState& appState) {
     default: break;
     }
 
+    Fade_Render(ctx.renderer);
     SDL_RenderPresent(ctx.renderer);
 }
 
-// ─── Update Handlers ─────────────────────────────────────────────
 void App_Update_Splash(float dt, _GAMESTATE& state, AppState& appState) {
     AppState next = UIManager_UpdateSplash(dt);
     if (next != STATE_SPLASH)
@@ -225,31 +238,47 @@ void App_Update_Menu(float dt, _GAMESTATE& state, AppState& appState) {
 }
 
 void App_Update_Playing(float dt, _GAMESTATE& state, AppState& appState) {
-    if (UIManager_IsPauseShown()) return;  // đóng băng logic khi pause
-    Animation_Update(dt, state);
-    WinEffect_Update(dt);
+    if (UIManager_IsPauseShown()) return;
+    HarvestResult_Update(dt);
+    Renderer_UpdatePop(dt);
+    Particle_Update(dt);
+    if (s_turnDelay > 0.0f) s_turnDelay -= dt;
 
-    if (state.mode == MODE_PVE && state.gameStatus == CHUA_KET_THUC && !state.turn) {
+    static float s_shimmerT = 0.0f;
+    s_shimmerT += dt;
+    if (state.gameStatus == CHUA_KET_THUC && s_shimmerT >= 0.2f &&
+        state._LastI >= 0 && state._LastI < BOARD_SIZE &&
+        state._LastJ >= 0 && state._LastJ < BOARD_SIZE &&
+        state._BOARD[state._LastI][state._LastJ].c != 0) {
+        s_shimmerT = 0.0f;
+        int px, py; App_CellToPixel(state._LastI, state._LastJ, px, py);
+        int fac = (state._BOARD[state._LastI][state._LastJ].c == -1) ? 0 : 1;
+        Particle_ShimmerAt((float)px, (float)(py - 12), fac);
+    }
+
+    if (state.mode == MODE_PVE && state.gameStatus == CHUA_KET_THUC && !state.turn && s_turnDelay <= 0.0f) {
         if (state.aiThinking) {
-            // Kiểm tra mỗi frame xem AI đã tính xong chưa (non-blocking)
-            if (s_aiFuture.valid() &&
-                s_aiFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-                Move best = s_aiFuture.get();
+            Move best;
+            if (AIWorker_Poll(best)) {
                 state.aiThinking = false;
                 if (best.row >= 0 && best.col >= 0) {
                     state.selectedRow = best.row;
                     state.selectedCol = best.col;
-                    Animation_StartMove(state, best.row, best.col, 1);
                     AudioManager_PlaySFX(SFX_MOVE);
+                    App_PlacePiece(state, best.row, best.col);
+                } else {
+                    state.gameStatus = HOA;
+                    AudioManager_PlaySFX(SFX_DRAW);
+                    HarvestResult_Start(state, HOA);
+                    UIManager_ShowResult(state, HOA);
                 }
             }
-        } else if (!Animation_IsPlaying()) {
+        } else {
             App_TriggerAITurn(state);
         }
     }
 }
 
-// ─── Event Handlers ──────────────────────────────────────────────
 void App_OnEvent_Menu(const SDL_Event& e, _GAMESTATE& state, AppState& appState) {
     AppState next = UIManager_HandleMenuEvent(e);
     if (next != STATE_MENU) {
@@ -265,18 +294,23 @@ void App_OnEvent_NameInput(const SDL_Event& e, _GAMESTATE& state, AppState& appS
 }
 
 void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appState) {
-    // ESC xử lý trước mọi lock — toggle pause hoặc về menu nếu game đã xong
+    if (UIManager_IsSaveNameDialogOpen()) {
+        UIManager_HandleSaveNameDialogEvent(e, state);
+        return;
+    }
+
     if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) {
         if (state.gameStatus != CHUA_KET_THUC) {
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
             App_TransitionTo(STATE_MENU, appState, state);
             return;
         }
+        AudioManager_PlaySFX(SFX_MENU_SELECT);
         if (UIManager_IsPauseShown()) UIManager_HidePause();
         else                          UIManager_ShowPause();
         return;
     }
 
-    // Khi pause overlay đang hiện: chặn tất cả input, chỉ xử lý pause menu
     if (UIManager_IsPauseShown()) {
         PauseAction action = UIManager_HandlePauseEvent(e, state);
         switch (action) {
@@ -287,6 +321,9 @@ void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appSta
             UIManager_HidePause();
             App_StartNewSession(state);
             break;
+        case PAUSE_SAVE:
+            UIManager_ShowSaveNameDialog();
+            break;
         case PAUSE_QUIT:
             UIManager_HidePause();
             App_TransitionTo(STATE_MENU, appState, state);
@@ -296,26 +333,35 @@ void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appSta
         return;
     }
 
-    // Khóa input khi animation đang chạy, AI đang tính, hoặc WinEffect chưa xong
-    if (Animation_IsPlaying() || state.aiThinking || WinEffect_IsAnimating()) return;
+    if (state.aiThinking || HarvestResult_IsAnimating() || s_turnDelay > 0.0f) return;
 
-    // R luôn hoạt động sau khi game kết thúc
     if (e.type == SDL_KEYDOWN && state.gameStatus != CHUA_KET_THUC) {
-        if (e.key.keysym.sym == SDLK_r) App_StartNewSession(state);
+        if (e.key.keysym.sym == SDLK_r) {
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+            App_StartNewSession(state);
+        }
         return;
     }
 
-    // Game is over — ignore mouse input too
     if (state.gameStatus != CHUA_KET_THUC) return;
 
-    // Chỉ nhận input khi là lượt người chơi
     bool isHumanTurn = (state.mode == MODE_PVP)
         || (state.mode == MODE_PVE && state.turn == true);
     if (!isHumanTurn) return;
 
     if (e.type == SDL_MOUSEMOTION) {
+        int oldRow = state.hoveredRow;
+        int oldCol = state.hoveredCol;
         App_PixelToCell(e.motion.x, e.motion.y,
             state.hoveredRow, state.hoveredCol);
+        if ((state.hoveredRow != oldRow || state.hoveredCol != oldCol) &&
+            state.hoveredRow >= 0 && state.hoveredCol >= 0 &&
+            state._BOARD[state.hoveredRow][state.hoveredCol].c == 0 &&
+            (state.hoveredRow != s_lastHoverSfxRow || state.hoveredCol != s_lastHoverSfxCol)) {
+            AudioManager_PlaySFX(SFX_MENU_HOVER);
+            s_lastHoverSfxRow = state.hoveredRow;
+            s_lastHoverSfxCol = state.hoveredCol;
+        }
     }
     else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
         int row, col;
@@ -323,38 +369,42 @@ void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appSta
             if (state._BOARD[row][col].c == 0) {
                 state.selectedRow = row;
                 state.selectedCol = col;
-                int charIdx = state.turn ? 0 : 1;
-                Animation_StartMove(state, row, col, charIdx);
                 AudioManager_PlaySFX(SFX_MOVE);
+                App_PlacePiece(state, row, col);
+            } else {
+                AudioManager_PlaySFX(SFX_MENU_HOVER);
             }
+        } else {
+            AudioManager_PlaySFX(SFX_MENU_HOVER);
         }
     }
     else if (e.type == SDL_KEYDOWN) {
         switch (e.key.keysym.sym) {
         case SDLK_w:
-            if (state.hoveredRow > 0)             state.hoveredRow--; break;
+            if (state.hoveredRow > 0) { state.hoveredRow--; AudioManager_PlaySFX(SFX_MENU_HOVER); } break;
         case SDLK_s:
-            if (state.hoveredRow < BOARD_SIZE - 1) state.hoveredRow++; break;
+            if (state.hoveredRow < BOARD_SIZE - 1) { state.hoveredRow++; AudioManager_PlaySFX(SFX_MENU_HOVER); } break;
         case SDLK_a:
-            if (state.hoveredCol > 0)             state.hoveredCol--; break;
+            if (state.hoveredCol > 0) { state.hoveredCol--; AudioManager_PlaySFX(SFX_MENU_HOVER); } break;
         case SDLK_d:
-            if (state.hoveredCol < BOARD_SIZE - 1) state.hoveredCol++; break;
+            if (state.hoveredCol < BOARD_SIZE - 1) { state.hoveredCol++; AudioManager_PlaySFX(SFX_MENU_HOVER); } break;
         case SDLK_RETURN:
         case SDLK_KP_ENTER: {
             int r = state.hoveredRow, c = state.hoveredCol;
             if (r >= 0 && c >= 0 && state._BOARD[r][c].c == 0) {
                 state.selectedRow = r;
                 state.selectedCol = c;
-                int charIdx = state.turn ? 0 : 1;
-                Animation_StartMove(state, r, c, charIdx);
                 AudioManager_PlaySFX(SFX_MOVE);
+                App_PlacePiece(state, r, c);
+            } else {
+                AudioManager_PlaySFX(SFX_MENU_HOVER);
             }
             break;
         }
-        case SDLK_l: // Lưu game
-            UIManager_ShowSaveDialog(state); break;
-        case SDLK_t: // Tải game
-            App_TransitionTo(STATE_LOAD_GAME, appState, state); break;
+        case SDLK_l:
+            UIManager_ShowSaveNameDialog(); AudioManager_PlaySFX(SFX_MENU_SELECT); break;
+        case SDLK_t:
+            AudioManager_PlaySFX(SFX_MENU_SELECT); App_TransitionTo(STATE_LOAD_GAME, appState, state); break;
         default: break;
         }
     }
@@ -363,12 +413,13 @@ void App_OnEvent_Playing(const SDL_Event& e, _GAMESTATE& state, AppState& appSta
 void App_OnEvent_LoadGame(const SDL_Event& e, _GAMESTATE& state, AppState& appState) {
     AppState next = UIManager_HandleLoadEvent(e, state);
     if (next == STATE_PLAYING) {
-        // Game đã được load vào state — chỉ reset runtime state, KHÔNG xóa board
+        AIWorker_Cancel();
         state.aiThinking = false;
         state.hoveredRow = BOARD_SIZE / 2;
         state.hoveredCol = BOARD_SIZE / 2;
-        Animation_Reset();
-        WinEffect_Reset();
+        Renderer_ResetCellAnims();
+        HarvestResult_Reset();
+        Particle_Clear();
         if (state.gameStatus != CHUA_KET_THUC)
             UIManager_ShowResult(state, state.gameStatus);
         else
@@ -380,96 +431,84 @@ void App_OnEvent_LoadGame(const SDL_Event& e, _GAMESTATE& state, AppState& appSt
     }
 }
 
-// ─── AI Turn ─────────────────────────────────────────────────────
 void App_TriggerAITurn(_GAMESTATE& state) {
     state.aiThinking = true;
-    // Chạy AI trên background thread — main loop không bị block
-    _GAMESTATE snapshot = state;
-    s_aiFuture = std::async(std::launch::async, AI_FindBestMove, snapshot);
+    AIWorker_Request(state);
 }
 
-// ─── Place Piece ─────────────────────────────────────────────────
-// Hàm này được gọi bởi Animation_Update khi hoạt ảnh PLACING kết thúc
 void App_PlacePiece(_GAMESTATE& state, int row, int col) {
     if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
     if (state._BOARD[row][col].c != 0) return;
 
-    // Ghi quân vào board
-    int color = state.turn ? -1 : 1;   // turn=true → X(-1), turn=false → O(1)
+    int color = state.turn ? -1 : 1;
     state._BOARD[row][col].c = color;
+    Renderer_TriggerPiecePop(row, col);
+    s_turnDelay = TURN_DELAY_S;
+    { int px, py; App_CellToPixel(row, col, px, py);
+      Particle_BurstDirt((float)px, (float)(py + 16)); }
     state._LastI = row;
     state._LastJ = col;
     state.players[state.turn ? 0 : 1].moves++;
 
-    // Kiểm tra kết quả — tái sử dụng Model.cpp cũ
     int result = TestBoard(state);
     ProcessFinish(state, result);
 
     if (result == P1_THANG || result == P2_THANG) {
-        Animation_StartCelebrate(state, state.turn ? 0 : 1);
         AudioManager_PlaySFX(SFX_WIN);
-        WinEffect_Start(state);
-        UIManager_ShowResult(state, result);  // hiện hint R/ESC trên panel sau khi WinEffect kết thúc
+        int fac = (result == P2_THANG) ? 1 : 0;
+        for (int k = 0; k < WIN_COUNT; k++) {
+            int wc = state._WIN_CELLS[k].x, wr = state._WIN_CELLS[k].y;
+            if (wr < 0 || wr >= BOARD_SIZE || wc < 0 || wc >= BOARD_SIZE) continue;
+            int px, py; App_CellToPixel(wr, wc, px, py);
+            Particle_BurstHarvest((float)px, (float)py, fac);
+        }
+        HarvestResult_Start(state, result);
+        UIManager_ShowResult(state, result);
     }
     else if (result == HOA) {
         AudioManager_PlaySFX(SFX_DRAW);
+        HarvestResult_Start(state, result);
         UIManager_ShowResult(state, result);
     }
 }
 
-// ─── Transitions ─────────────────────────────────────────────────
 void App_TransitionTo(AppState newState, AppState& appState, _GAMESTATE& state) {
-    appState = newState;
-    switch (newState) {
-    case STATE_MENU:
-        UIManager_ShowMenu();
-        AudioManager_PlayBGM("assets/sounds/menu_bgm.ogg");
-        break;
-    case STATE_NAME_INPUT:
-        UIManager_ShowNameInput(state);
-        break;
-    case STATE_PLAYING:
-        App_StartNewGame(state);
-        AudioManager_PlayBGM("assets/sounds/game_bgm.ogg");
-        break;
-    case STATE_LOAD_GAME:
-        UIManager_ShowLoadScreen();
-        break;
-    case STATE_SETTINGS:
-        UIManager_ShowSettings();
-        break;
-    case STATE_SPLASH:
-        UIManager_ShowSplash();
-        break;
-    case STATE_EXIT:
-        break;
+
+    if (newState == STATE_SPLASH || newState == STATE_EXIT) {
+        appState = newState;
+        if (newState == STATE_SPLASH) UIManager_ShowSplash();
+        return;
     }
+
+    Fade_Start(newState, &state);
+    (void)appState;
 }
 
 void App_StartNewGame(_GAMESTATE& state) {
     ResetData(state);
+    AIWorker_Cancel();
     state.hoveredRow = BOARD_SIZE / 2;
     state.hoveredCol = BOARD_SIZE / 2;
     state.gameStatus = CHUA_KET_THUC;
     state.aiThinking = false;
-    Renderer_RandomizeBoard();
-    Animation_Reset();
-    WinEffect_Reset();
+    Renderer_ResetCellAnims();
+    HarvestResult_Reset();
+    Particle_Clear();
 }
 
 void App_StartNewSession(_GAMESTATE& state) {
     NewSession(state);
+    AIWorker_Cancel();
     state.hoveredRow = BOARD_SIZE / 2;
     state.hoveredCol = BOARD_SIZE / 2;
     state.gameStatus = CHUA_KET_THUC;
     state.aiThinking = false;
-    Renderer_RandomizeBoard();
-    Animation_Reset();
-    WinEffect_Reset();
+    Renderer_ResetCellAnims();
+    HarvestResult_Reset();
+    Particle_Clear();
     UIManager_HideResult();
 }
 
-// ─── Coordinate Conversion ────────────────────────────────────────
 bool App_PixelToCell(int px, int py, int& outRow, int& outCol) {
     int col = (px - BOARD_OFFSET_X) / CELL_SIZE;
     int row = (py - BOARD_OFFSET_Y) / CELL_SIZE;

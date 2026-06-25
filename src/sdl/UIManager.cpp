@@ -1,1254 +1,1555 @@
-#include "UIManager.h"
-#include "../game/FileHandling.h"
+#define _CRT_SECURE_NO_WARNINGS
+#include "sdl/UIManager.h"
+#include "sdl/DesignTokens.h"
+#include "sdl/Renderer.h"
+#include "sdl/AudioManager.h"
+#include "sdl/Particle.h"
+#include "game/FileHandling.h"
 #include <cstring>
 #include <vector>
 #include <string>
 #include <cmath>
+#include <unordered_map>
+#include <cstdio>
 
-// ================================================================
-//  UIManager.cpp
-//
-//  Layout HUD: Panel P1 (trái) | Board | Panel P2 (phải)
-//  Mỗi panel rộng LEFT_PANEL_WIDTH / HUD_PANEL_WIDTH = 200px
-// ================================================================
-
-// ── Cozy Style Palette ────────────────────────────────────────────
-// Tất cả màu UI tham chiếu qua đây — dễ thay đổi đồng loạt
-static const SDL_Color COZY_PARCHMENT  = {212, 180, 134, 225};
-static const SDL_Color COZY_PARCHMENT2 = {195, 162, 112, 240};  // darker panel
-static const SDL_Color COZY_WOOD_DARK  = {107,  56,  24, 255};
-static const SDL_Color COZY_WOOD_MID   = {160,  90,  35, 255};
-static const SDL_Color COZY_TEXT_DARK  = { 72,  36,   8, 255};
-static const SDL_Color COZY_TEXT_LIGHT = {240, 218, 175, 255};
-static const SDL_Color COZY_GOLD       = {232, 198,  58, 255};
-static const SDL_Color COZY_RED        = {178,  50,  24, 255};
-static const SDL_Color COZY_GREEN      = { 68, 140,  52, 255};
-
-// ── Icon textures (Garden Cozy Icons Pack) ────────────────────────
 enum IconID {
-    ICON_SETTINGS=0, ICON_X, ICON_ARROW_L, ICON_ARROW_R,
-    ICON_PAUSE, ICON_BACK, ICON_TRASH, ICON_TROPHY,
-    ICON_SOUND, ICON_MUTE, ICON_BOOK, ICON_COUNT
+    ICON_SOUND=0, ICON_MUTE, ICON_COUNT
 };
-static SDL_Texture* s_icons[ICON_COUNT] = {};
 
-// ── Character portrait layers (Free Base by Cozy Fae) ─────────────
-// P1 (X/red): 5 layers; P2 (O/blue): 5 layers
-static SDL_Texture* s_charP1[5] = {};
-static SDL_Texture* s_charP2[5] = {};
+static SDL_Renderer* s_renderer  = nullptr;
+static TTF_Font*     s_fontXL    = nullptr;
+static TTF_Font*     s_fontLg    = nullptr;
+static TTF_Font*     s_fontMd    = nullptr;
+static TTF_Font*     s_fontSm    = nullptr;
 
-// ── Title sign (menu screen) ──────────────────────────────────────
-static SDL_Texture* s_titleSign = nullptr;
+static SDL_Texture*  s_icons[ICON_COUNT]  = {};
 
-// ── Module statics ────────────────────────────────────────────────
-static SDL_Renderer* s_renderer = nullptr;
-static TTF_Font*     s_fontLg   = nullptr;   // 34pt — tiêu đề
-static TTF_Font*     s_fontMd   = nullptr;   // 22pt — nội dung
-static TTF_Font*     s_fontSm   = nullptr;   // 16pt — gợi ý
+static SDL_Texture*  s_hudPlaqueP1 = nullptr;
+static SDL_Texture*  s_hudPlaqueP2 = nullptr;
+static SDL_Texture*  s_turnBanner  = nullptr;
+static SDL_Texture*  s_panelGlow    = nullptr;
+static SDL_Texture*  s_panelStakeP1 = nullptr;
+static SDL_Texture*  s_panelStakeP2 = nullptr;
 
-// ── Result dialog ─────────────────────────────────────────────────
-static bool s_showResult = false;
-static char s_resultMsg[64] = {};
+static SDL_Texture*  s_splashBg    = nullptr;
+static SDL_Texture*  s_menuBg      = nullptr;
+static SDL_Texture*  s_settingsBg  = nullptr;
+static SDL_Texture*  s_loadBg      = nullptr;
 
-// ── Menu ─────────────────────────────────────────────────────────
-static int   s_menuSel   = 0;
-static float s_menuHue   = 0.0f;
-static GameMode s_pendingMode = MODE_PVP;
-
-// Animation: hover scale (0→1) và bounce countdown mỗi nút
-// s_menuHoverScale[i]: 0.0=bình thường, 1.0=đang hover → nút phóng to 8%
-// s_menuBounce[i]: đếm ngược từ 0.20s → 0 khi click → nút "nhún" xuống rồi nảy lên
-static float s_menuHoverScale[5] = {};
-static float s_menuBounce[5]     = {};
-
-// Deferred transition: sau khi bounce chạy xong mới chuyển màn hình
-static AppState s_pendingMenuState = STATE_MENU;
-static float    s_pendingDelay     = 0.0f;
-
-static const char* MENU_ITEMS[] = {
-    "Player vs Player",
-    "Player vs AI",
-    "Load Game",
-    "Settings",
-    "Quit"
+enum UiTexID {
+    UI_MAIN_440x90 = 0,
+    UI_MAIN_PLAIN_440x90,
+    UI_SECONDARY_440x58,
+    UI_MODE_308x56,
+    UI_START_240x56,
+    UI_MEDIUM_224x56,
+    UI_PAUSE_360x60,
+    UI_SMALL_118x44,
+    UI_OK_200x58,
+    UI_TAB_210x52,
+    UI_TOGGLE_194x44,
+    UI_SQUARE_56x56,
+    UI_ICON_44x44,
+    UI_VOLUME_52x44,
+    UI_KEY_SINGLE_44x44,
+    UI_KEY_SQUARE_56x56,
+    UI_KEY_SHORT_72x44,
+    UI_KEY_MEDIUM_96x44,
+    UI_KEY_WIDE_128x44,
+    UI_KEY_EXTRA_WIDE_160x44,
+    UI_TEX_COUNT
 };
-static const int MENU_COUNT = 5;
+static SDL_Texture* s_uiTex[UI_TEX_COUNT][4] = {};
+static SDL_Texture* s_titleSign400 = nullptr;
+static SDL_Texture* s_titleSign320 = nullptr;
+static SDL_Texture* s_creditsSign240 = nullptr;
+static SDL_Texture* s_soundToggleTex[2][4] = {};
 
-// ── Name Input ────────────────────────────────────────────────────
+static const char* MENU_ITEMS[] = { "New Game", "Continue", "Settings", "Leave the Grove" };
+static const int   MENU_COUNT   = 4;
+
+static int   s_menuSel            = 0;
+static int   s_menuBtnState[4]    = {};
+static float s_menuBounce[4]      = {};
+static bool  s_showCredits        = false;
+static bool  s_showHowTo          = false;
+static int   s_htpBtnState        = 0;
+static int   s_soundBtnState      = 0;
+static AppState s_pendingState    = STATE_MENU;
+static float    s_pendingDelay    = 0.0f;
+
 struct NameInputUI {
-    GameMode mode      = MODE_PVP;
-    int      diff      = AI_MEDIUM;
-    int      field     = 0;     // 0=P1name, 1=P2name/diff, 2=start
-    char     p1[30]    = "Player 1";
-    char     p2[30]    = "Player 2";
+    GameMode mode = MODE_PVP;
+    int      diff = AI_MEDIUM;
+    int      field= 0;
+    char     p1[30] = "Player 1";
+    char     p2[30] = "Player 2";
 };
 static NameInputUI s_ni;
 
-// ── Load screen ───────────────────────────────────────────────────
 static std::vector<std::string> s_saves;
+static std::vector<std::string> s_saveSlots;
 static int s_loadSel = 0;
+static Uint32 s_saveMsgUntil = 0;
 
-// ── Helpers ───────────────────────────────────────────────────────
+static bool s_showResult = false;
+static char s_resultMsg[64] = {};
+
+static float s_splashTimer = 0.0f;
+
+static bool s_showPause = false;
+
+static int s_settingsTab = 0;
+
+static void FillRect(SDL_Renderer* r, int x, int y, int w, int h, SDL_Color c) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+    SDL_Rect rect = {x, y, w, h};
+    SDL_RenderFillRect(r, &rect);
+}
+
+static void OutlineRect(SDL_Renderer* r, int x, int y, int w, int h, SDL_Color c, int t = 1) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+    for (int i = 0; i < t; i++) {
+        SDL_Rect rect = {x+i, y+i, w-2*i, h-2*i};
+        SDL_RenderDrawRect(r, &rect);
+    }
+}
+
+static void DrawCircleFill(SDL_Renderer* r, int cx, int cy, int radius, SDL_Color c) {
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, c.r, c.g, c.b, c.a);
+    for (int dy = -radius; dy <= radius; dy++) {
+        int dx = (int)std::sqrt((float)(radius*radius - dy*dy));
+        SDL_RenderDrawLine(r, cx-dx, cy+dy, cx+dx, cy+dy);
+    }
+}
+
+struct CachedText { SDL_Texture* tex; int w, h; Uint32 lastUse; };
+static std::unordered_map<std::string, CachedText> s_textCache;
+static Uint32 s_textFrame = 0;
+
+static void TextCache_Tick() {
+    s_textFrame++;
+    for (auto it = s_textCache.begin(); it != s_textCache.end(); ) {
+        if (s_textFrame - it->second.lastUse > 150) {
+            if (it->second.tex) SDL_DestroyTexture(it->second.tex);
+            it = s_textCache.erase(it);
+        } else ++it;
+    }
+}
+static void TextCache_Clear() {
+    for (auto& kv : s_textCache) if (kv.second.tex) SDL_DestroyTexture(kv.second.tex);
+    s_textCache.clear();
+}
+
 static void RT(SDL_Renderer* r, TTF_Font* f, const char* t,
                int x, int y, SDL_Color c, bool center = false) {
     if (!f || !t || !t[0]) return;
-    SDL_Surface* s = TTF_RenderUTF8_Blended(f, t, c);
-    if (!s) return;
-    SDL_Texture* tx = SDL_CreateTextureFromSurface(r, s);
-    SDL_FreeSurface(s);
-    if (!tx) return;
-    int w, h;
-    SDL_QueryTexture(tx, nullptr, nullptr, &w, &h);
-    SDL_Rect dst = { center ? x - w/2 : x, y, w, h };
-    SDL_RenderCopy(r, tx, nullptr, &dst);
-    SDL_DestroyTexture(tx);
-}
 
-static SDL_Color HueRGB(float hue) {
-    float h = fmodf(hue, 360.f) / 60.f;
-    int   i = static_cast<int>(h);
-    float f = h - i;
-    float rv, gv, bv;
-    switch (i) {
-    case 0:  rv=1;   gv=f;   bv=0;   break;
-    case 1:  rv=1-f; gv=1;   bv=0;   break;
-    case 2:  rv=0;   gv=1;   bv=f;   break;
-    case 3:  rv=0;   gv=1-f; bv=1;   break;
-    case 4:  rv=f;   gv=0;   bv=1;   break;
-    default: rv=1;   gv=0;   bv=1-f; break;
+    char head[40];
+    std::snprintf(head, sizeof(head), "%p|%02x%02x%02x%02x|", (void*)f, c.r, c.g, c.b, c.a);
+    std::string key = head; key += t;
+
+    SDL_Texture* tx; int w, h;
+    auto it = s_textCache.find(key);
+    if (it != s_textCache.end()) {
+        tx = it->second.tex; w = it->second.w; h = it->second.h;
+        it->second.lastUse = s_textFrame;
+    } else {
+        SDL_Surface* s = TTF_RenderUTF8_Blended(f, t, c);
+        if (!s) return;
+        tx = SDL_CreateTextureFromSurface(r, s);
+        w = s->w; h = s->h;
+        SDL_FreeSurface(s);
+        if (!tx) return;
+        SDL_SetTextureBlendMode(tx, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tx, SDL_ScaleModeLinear);
+        s_textCache[key] = { tx, w, h, s_textFrame };
     }
-    return { static_cast<Uint8>(rv*255), static_cast<Uint8>(gv*255),
-             static_cast<Uint8>(bv*255), 255 };
+    SDL_Rect dst = { center ? x - w / 2 : x, y - h / 2, w, h };
+    SDL_RenderCopy(r, tx, nullptr, &dst);
 }
 
-static TTF_Font* TryFont(const char* path, int pt) {
-    TTF_Font* f = TTF_OpenFont(path, pt);
-    if (f) return f;
-    return TTF_OpenFont("C:\\Windows\\Fonts\\arial.ttf", pt);
+static void RTO(SDL_Renderer* r, TTF_Font* f, const char* t,
+                int x, int y, SDL_Color c, bool center = false,
+                SDL_Color outline = {26, 16, 8, 220}) {
+    if (!f || !t || !t[0]) return;
+    for (int oy = -2; oy <= 2; oy += 2)
+        for (int ox = -2; ox <= 2; ox += 2)
+            if (ox || oy) RT(r, f, t, x + ox, y + oy, outline, center);
+    RT(r, f, t, x, y, c, center);
 }
 
-// ── Init / Shutdown ───────────────────────────────────────────────
+static void DrawCover(SDL_Renderer* r, SDL_Texture* tex) {
+    if (!tex) return;
+    int tw, th; SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th);
+    if (tw <= 0 || th <= 0) return;
+    float targetAR = (float)WINDOW_WIDTH / WINDOW_HEIGHT;
+    float texAR    = (float)tw / th;
+    SDL_Rect src;
+    if (texAR > targetAR) {
+        src.h = th; src.y = 0;
+        src.w = (int)(th * targetAR); src.x = (tw - src.w) / 2;
+    } else {
+        src.w = tw; src.x = 0;
+        src.h = (int)(tw / targetAR); src.y = (th - src.h) / 2;
+    }
+    SDL_Rect dst = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
+    SDL_RenderCopy(r, tex, &src, &dst);
+}
+
+static SDL_Texture* LoadBlendTexture(SDL_Renderer* r, const char* path) {
+    SDL_Texture* tex = IMG_LoadTexture(r, path);
+    if (tex) {
+        SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(tex, SDL_ScaleModeLinear);
+    }
+    return tex;
+}
+
+static void DrawTextureRect(SDL_Renderer* r, SDL_Texture* tex, int x, int y, int w, int h) {
+    if (!tex) return;
+    SDL_Rect dst = { x, y, w, h };
+    SDL_RenderCopy(r, tex, nullptr, &dst);
+}
+
+static void DrawButton(SDL_Renderer* r, int x, int y, int w, int h,
+                       int state, const char* label);
+static void DrawIcon(SDL_Renderer* r, IconID id, int cx, int cy, int size);
+
+static int UiStateIndex(int state) {
+    if (state == 1) return 1;
+    if (state == 2) return 2;
+    if (state < 0)  return 3;
+    return 0;
+}
+
+static UiTexID PickButtonTexture(int w, int h, const char* label) {
+    if (w == 440 && h == 90) return UI_MAIN_440x90;
+    if (w == 440 && h == 58) return UI_SECONDARY_440x58;
+    if (w == 308 && h == 56) return UI_MODE_308x56;
+    if (w == 240 && h == 56) return UI_START_240x56;
+    if (w == 224 && h == 56) return UI_MEDIUM_224x56;
+    if (w == 360 && h == 60) return UI_PAUSE_360x60;
+    if (w == 118 && h == 44) return UI_SMALL_118x44;
+    if (w == 200 && h == 58) return UI_OK_200x58;
+    if (w == 210 && h == 52) return UI_TAB_210x52;
+    if (w == 194 && h == 44) return UI_TOGGLE_194x44;
+    if (w == 56  && h == 56) return UI_SQUARE_56x56;
+    if (w == 52  && h == 44) return UI_VOLUME_52x44;
+    if (w == 44  && h == 44) return UI_ICON_44x44;
+    if (label && label[0] == 'X' && w <= 60 && h <= 60) return UI_ICON_44x44;
+    return UI_TEX_COUNT;
+}
+
+static SDL_Texture* GetButtonTexture(int w, int h, int state, const char* label) {
+    UiTexID id = PickButtonTexture(w, h, label);
+    if (id == UI_TEX_COUNT) return nullptr;
+
+    if (label && label[0] && w >= 180 && h >= 52) {
+        unsigned hash = 2166136261u;
+        for (const char* p = label; *p; ++p) {
+            hash ^= (unsigned char)(*p);
+            hash *= 16777619u;
+        }
+        hash ^= (unsigned)w * 31u + (unsigned)h;
+        if ((hash % 3u) == 0u && s_uiTex[UI_MAIN_PLAIN_440x90][UiStateIndex(state)]) {
+            return s_uiTex[UI_MAIN_PLAIN_440x90][UiStateIndex(state)];
+        }
+    }
+    return s_uiTex[id][UiStateIndex(state)];
+}
+
+static void DrawSoundToggle(SDL_Renderer* r, int cx, int cy, int size, bool muted, int state) {
+    SDL_Texture* tex = s_soundToggleTex[muted ? 1 : 0][UiStateIndex(state)];
+    if (tex) {
+        DrawTextureRect(r, tex, cx - size / 2, cy - size / 2, size, size);
+        return;
+    }
+    DrawIcon(r, muted ? ICON_MUTE : ICON_SOUND, cx, cy, size);
+}
+
+static void DrawKeycap(SDL_Renderer* r, int x, int y, int w, int h,
+                       const char* label, const char* detail = nullptr) {
+    UiTexID id = UI_KEY_MEDIUM_96x44;
+    if (w <= 48) id = UI_KEY_SINGLE_44x44;
+    else if (w <= 62 && h >= 50) id = UI_KEY_SQUARE_56x56;
+    else if (w <= 80) id = UI_KEY_SHORT_72x44;
+    else if (w <= 104) id = UI_KEY_MEDIUM_96x44;
+    else if (w <= 136) id = UI_KEY_WIDE_128x44;
+    else id = UI_KEY_EXTRA_WIDE_160x44;
+
+    DrawTextureRect(r, s_uiTex[id][0], x, y, w, h);
+    if (!s_uiTex[id][0]) DrawButton(r, x, y, w, h, 0, nullptr);
+    if (label && label[0]) {
+        RTO(r, s_fontSm, label, x + w / 2, y + h / 2,
+            {58, 32, 14, 255}, true, {255, 248, 232, 225});
+    }
+    if (detail && detail[0]) {
+        RT(r, s_fontSm, detail, x + w + 16, y + h / 2, DT_LIGHT, false);
+    }
+}
+
+static void DrawPanel(SDL_Renderer* r, int x, int y, int w, int h) {
+    FillRect(r, x, y, w, h, {DT_GROUND.r, DT_GROUND.g, DT_GROUND.b, 222});
+
+    FillRect(r, x+3, y+2, w-6, 1, {DT_WARM.r, DT_WARM.g, DT_WARM.b, 40});
+    OutlineRect(r, x, y, w, h, DT_LINE, 2);
+}
+
+static void DrawIcon(SDL_Renderer* r, IconID id, int cx, int cy, int size) {
+    if (s_uiTex[UI_ICON_44x44][0]) {
+        DrawTextureRect(r, s_uiTex[UI_ICON_44x44][0],
+                        cx - size / 2, cy - size / 2, size, size);
+    }
+    if (id >= 0 && id < ICON_COUNT && s_icons[id]) {
+        int iconSize = s_uiTex[UI_ICON_44x44][0] ? (int)(size * 0.58f) : size;
+        SDL_Rect dst = {cx-iconSize/2, cy-iconSize/2, iconSize, iconSize};
+        SDL_RenderCopy(r, s_icons[id], nullptr, &dst);
+        return;
+    }
+    DrawCircleFill(r, cx, cy, size/3, {DT_WARM.r, DT_WARM.g, DT_WARM.b, 180});
+}
+
+static void DrawButton(SDL_Renderer* r, int x, int y, int w, int h,
+                       int state, const char* label) {
+    SDL_Texture* skin = GetButtonTexture(w, h, state, label);
+    if (skin) {
+        DrawTextureRect(r, skin, x, y, w, h);
+        if (label && label[0]) {
+            int ly = y + h / 2 + (state == 2 ? 1 : 0);
+            RTO(r, s_fontLg, label, x + w / 2, ly,
+                {58, 32, 14, 255}, true, {255, 248, 232, 235});
+        }
+        return;
+    }
+
+    SDL_Color top, bot, border, hiEdge;
+    if      (state == 1) { top={152,110,62,250}; bot={114,78,40,250}; border={228,186,112,255}; hiEdge={240,206,138,150}; }
+    else if (state == 2) { top={94,62,30,250};   bot={70,44,20,250};  border={150,104,56,255};  hiEdge={150,108,60,70};  }
+    else                 { top={134,94,52,244};  bot={98,66,34,244};  border={176,126,68,235};  hiEdge={226,192,128,120}; }
+
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    for (int i = 0; i < h; i++) {
+        float t = (h > 1) ? (float)i / (h - 1) : 0.0f;
+        Uint8 rr = (Uint8)(top.r + (bot.r - top.r) * t);
+        Uint8 gg = (Uint8)(top.g + (bot.g - top.g) * t);
+        Uint8 bb = (Uint8)(top.b + (bot.b - top.b) * t);
+        SDL_SetRenderDrawColor(r, rr, gg, bb, top.a);
+        SDL_RenderDrawLine(r, x, y + i, x + w - 1, y + i);
+    }
+
+    FillRect(r, x + 3, y + 2, w - 6, 2, hiEdge);
+    FillRect(r, x + 3, y + h - 4, w - 6, 2, {40, 24, 10, 150});
+    OutlineRect(r, x, y, w, h, border, 2);
+
+    if (label && label[0]) {
+        int ly = y + h / 2 + (state == 2 ? 1 : 0);
+        RTO(r, s_fontLg, label, x + w / 2, ly,
+            {58, 32, 14, 255}, true, {255, 248, 232, 235});
+    }
+}
+
+static void DrawHangingSign(SDL_Renderer* r, int cx, int signTopY,
+                             int signW, int signH, const char* title) {
+    SDL_Texture* signTex = nullptr;
+    if (signW == 400 && signH == 90) signTex = s_titleSign400;
+    else if (signW == 320 && signH == 90) signTex = s_titleSign320;
+    if (signTex) {
+        int chainL = cx - signW/4;
+        int chainR = cx + signW/4;
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(r, DT_LINE.r, DT_LINE.g, DT_LINE.b, 190);
+        SDL_RenderDrawLine(r, chainL, 0, chainL, signTopY + 12);
+        SDL_RenderDrawLine(r, chainR, 0, chainR, signTopY + 12);
+        DrawTextureRect(r, signTex, cx - signW / 2, signTopY, signW, signH);
+        if (title)
+            RTO(r, s_fontXL, title, cx, signTopY + signH/2,
+                {58, 32, 14, 255}, true, {255, 248, 232, 230});
+        return;
+    }
+
+    int chainL = cx - signW/4;
+    int chainR = cx + signW/4;
+
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, DT_LINE.r, DT_LINE.g, DT_LINE.b, 190);
+    SDL_RenderDrawLine(r, chainL, 0, chainL, signTopY);
+    SDL_RenderDrawLine(r, chainR, 0, chainR, signTopY);
+
+    SDL_SetRenderDrawColor(r, DT_WOOD.r, DT_WOOD.g, DT_WOOD.b, 230);
+    for (int ry = 10; ry < signTopY; ry += 14) {
+        SDL_Rect ring = {chainL-3, ry, 6, 6};
+        SDL_RenderFillRect(r, &ring);
+        ring.x = chainR-3;
+        SDL_RenderFillRect(r, &ring);
+    }
+
+    FillRect(r, cx-signW/2, signTopY, signW, signH, DT_WOOD);
+    FillRect(r, cx-signW/2+2, signTopY+1, signW-4, 2, {DT_WARM.r, DT_WARM.g, DT_WARM.b, 160});
+    FillRect(r, cx-signW/2+2, signTopY+signH-3, signW-4, 2, {DT_DEEP.r, DT_DEEP.g, DT_DEEP.b, 200});
+    OutlineRect(r, cx-signW/2, signTopY, signW, signH, DT_LINE, 2);
+
+    if (title)
+        RTO(r, s_fontXL, title, cx, signTopY + signH/2,
+            {58, 32, 14, 255}, true, {255, 248, 232, 230});
+}
+
 bool UIManager_Init(SDL_Renderer* renderer) {
     s_renderer = renderer;
+    InitSaveFolder();
+    if (TTF_Init() != 0) {
+        SDL_Log("UIManager_Init: TTF_Init failed: %s", TTF_GetError());
+        return false;
+    }
+    const char* fontPath  = "assets/fonts/Baloo2.ttf";
+    bool        isPixelFont = false;
+    s_fontXL = TTF_OpenFont(fontPath, DT_T1);
+    s_fontLg = TTF_OpenFont(fontPath, DT_T2);
+    s_fontMd = TTF_OpenFont(fontPath, DT_T3);
+    s_fontSm = TTF_OpenFont(fontPath, DT_T4);
+    if (!s_fontMd) {
+        SDL_Log("UIManager_Init: %s failed (%s) — falling back to m5x7",
+                fontPath, TTF_GetError());
+        fontPath    = "assets/fonts/m5x7.ttf";
+        isPixelFont = true;
+        s_fontXL = TTF_OpenFont(fontPath, DT_T1);
+        s_fontLg = TTF_OpenFont(fontPath, DT_T2);
+        s_fontMd = TTF_OpenFont(fontPath, DT_T3);
+        s_fontSm = TTF_OpenFont(fontPath, DT_T4);
+    }
+    if (!s_fontMd) {
+        SDL_Log("UIManager_Init: font load failed: %s", TTF_GetError());
+        return false;
+    }
+    int hint = isPixelFont ? TTF_HINTING_MONO : TTF_HINTING_LIGHT;
+    TTF_Font* faces[4] = { s_fontXL, s_fontLg, s_fontMd, s_fontSm };
+    for (TTF_Font* f : faces)
+        if (f) TTF_SetFontHinting(f, hint);
 
-    if (TTF_Init() != 0)
-        SDL_Log("TTF_Init failed: %s — text may be blank", TTF_GetError());
-
-    const char* FONT = "assets/fonts/font.ttf";
-    s_fontLg = TryFont(FONT, 34);
-    s_fontMd = TryFont(FONT, 22);
-    s_fontSm = TryFont(FONT, 16);
-
-    if (!s_fontMd)
-        SDL_Log("UIManager: no font found — text will be blank");
-
-    // Load icon textures (Garden Cozy Icons Pack)
-    const char* iconPaths[ICON_COUNT] = {
-        "assets/sprites/icon_settings.png",
-        "assets/sprites/icon_x.png",
-        "assets/sprites/icon_arrow_l.png",
-        "assets/sprites/icon_arrow_r.png",
-        "assets/sprites/icon_pause.png",
-        "assets/sprites/icon_back.png",
-        "assets/sprites/icon_trash.png",
-        "assets/sprites/icon_trophy.png",
-        "assets/sprites/icon_sound.png",
-        "assets/sprites/icon_mute.png",
-        "assets/sprites/icon_book.png",
-    };
-    for (int i = 0; i < ICON_COUNT; i++)
-        s_icons[i] = IMG_LoadTexture(renderer, iconPaths[i]);
-
-    // Title sign (fallback graceful nếu file chưa có)
-    s_titleSign = IMG_LoadTexture(renderer, "assets/sprites/title_sign.jpg");
-
-    // Load character portrait layers (Free Base by Cozy Fae)
-    // P1 (X): skin03, red top, brown pants, short brown hair, blue eyes
-    const char* p1Paths[5] = {
-        "assets/sprites/char_p1_base.png",
-        "assets/sprites/char_p1_top.png",
-        "assets/sprites/char_p1_bottom.png",
-        "assets/sprites/char_p1_hair.png",
-        "assets/sprites/char_p1_eyes.png",
-    };
-    // P2 (O): skin07, blue top, blue pants, medium yellow hair, green eyes
-    const char* p2Paths[5] = {
-        "assets/sprites/char_p2_base.png",
-        "assets/sprites/char_p2_top.png",
-        "assets/sprites/char_p2_bottom.png",
-        "assets/sprites/char_p2_hair.png",
-        "assets/sprites/char_p2_eyes.png",
-    };
-    for (int i = 0; i < 5; i++) {
-        s_charP1[i] = IMG_LoadTexture(renderer, p1Paths[i]);
-        s_charP2[i] = IMG_LoadTexture(renderer, p2Paths[i]);
+    if (!isPixelFont) {
+        if (s_fontXL) TTF_SetFontStyle(s_fontXL, TTF_STYLE_BOLD);
+        if (s_fontLg) TTF_SetFontStyle(s_fontLg, TTF_STYLE_BOLD);
     }
 
-    InitSaveFolder();
+    const char* iconPaths[ICON_COUNT] = {
+        "assets/ui/icon_sound.png", "assets/ui/icon_mute.png"
+    };
+    for (int i = 0; i < ICON_COUNT; i++) {
+        s_icons[i] = IMG_LoadTexture(renderer, iconPaths[i]);
+        if (s_icons[i]) SDL_SetTextureBlendMode(s_icons[i], SDL_BLENDMODE_BLEND);
+    }
+
+    const char* uiBase = "assets/ui/controls/";
+    const char* stateNames[4] = { "normal", "hover", "pressed", "disabled" };
+    const char* uiPrefixes[UI_TEX_COUNT] = {
+        "button_main_440x90",
+        "button_main_plain_440x90",
+        "button_secondary_440x58",
+        "button_mode_308x56",
+        "button_start_240x56",
+        "button_medium_224x56",
+        "button_pause_360x60",
+        "button_small_118x44",
+        "button_confirm_200x58",
+        "button_tab_210x52",
+        "button_toggle_194x44",
+        "button_square_56x56",
+        "button_icon_44x44",
+        "button_volume_52x44",
+        "keycap_single_44x44",
+        "keycap_square_56x56",
+        "keycap_short_72x44",
+        "keycap_medium_96x44",
+        "keycap_wide_128x44",
+        "keycap_extra_wide_160x44",
+    };
+    for (int i = 0; i < UI_TEX_COUNT; i++) {
+        for (int st = 0; st < 4; st++) {
+            char path[256];
+            std::snprintf(path, sizeof(path), "%s%s_%s.png", uiBase, uiPrefixes[i], stateNames[st]);
+            s_uiTex[i][st] = LoadBlendTexture(renderer, path);
+        }
+    }
+    s_titleSign400  = LoadBlendTexture(renderer, "assets/ui/controls/title_sign_400x90.png");
+    s_titleSign320  = LoadBlendTexture(renderer, "assets/ui/controls/title_sign_compact_320x90.png");
+    s_creditsSign240 = LoadBlendTexture(renderer, "assets/ui/controls/credits_sign_240x80.png");
+    const char* soundKinds[2] = { "sound", "mute" };
+    for (int k = 0; k < 2; k++) {
+        for (int st = 0; st < 4; st++) {
+            char path[256];
+            std::snprintf(path, sizeof(path),
+                          "assets/ui/controls/audio_toggle/audio_toggle_%s_%s.png",
+                          soundKinds[k], stateNames[st]);
+            s_soundToggleTex[k][st] = LoadBlendTexture(renderer, path);
+        }
+    }
+
+    s_hudPlaqueP1 = IMG_LoadTexture(renderer, "assets/gameplay/match_scene/hud_strawberry_panel.png");
+    s_hudPlaqueP2 = IMG_LoadTexture(renderer, "assets/gameplay/match_scene/hud_blueberry_panel.png");
+    s_turnBanner  = IMG_LoadTexture(renderer, "assets/gameplay/match_scene/turn_banner.png");
+    if (s_hudPlaqueP1) SDL_SetTextureBlendMode(s_hudPlaqueP1, SDL_BLENDMODE_BLEND);
+    if (s_hudPlaqueP2) SDL_SetTextureBlendMode(s_hudPlaqueP2, SDL_BLENDMODE_BLEND);
+    if (s_turnBanner)  SDL_SetTextureBlendMode(s_turnBanner,  SDL_BLENDMODE_BLEND);
+
+    s_panelGlow    = IMG_LoadTexture(renderer, "assets/ui/panel_active_glow.png");
+    s_panelStakeP1 = IMG_LoadTexture(renderer, "assets/ui/player_panel_strawberry_name_stake_440x380.png");
+    s_panelStakeP2 = IMG_LoadTexture(renderer, "assets/ui/player_panel_blueberry_name_stake_440x380.png");
+    if (s_panelGlow)    SDL_SetTextureBlendMode(s_panelGlow,    SDL_BLENDMODE_BLEND);
+    if (s_panelStakeP1) SDL_SetTextureBlendMode(s_panelStakeP1, SDL_BLENDMODE_BLEND);
+    if (s_panelStakeP2) SDL_SetTextureBlendMode(s_panelStakeP2, SDL_BLENDMODE_BLEND);
+
+    s_splashBg   = IMG_LoadTexture(renderer, "assets/ui/splash_bg.png");
+    s_menuBg     = IMG_LoadTexture(renderer, "assets/ui/menu_bg.png");
+    s_settingsBg = IMG_LoadTexture(renderer, "assets/ui/settings_bg.png");
+    s_loadBg     = IMG_LoadTexture(renderer, "assets/ui/load_bg.png");
+    if (s_splashBg)   SDL_SetTextureBlendMode(s_splashBg,   SDL_BLENDMODE_BLEND);
+    if (s_menuBg)     SDL_SetTextureBlendMode(s_menuBg,     SDL_BLENDMODE_BLEND);
+    if (s_settingsBg) SDL_SetTextureBlendMode(s_settingsBg, SDL_BLENDMODE_BLEND);
+    if (s_loadBg)     SDL_SetTextureBlendMode(s_loadBg,     SDL_BLENDMODE_BLEND);
+
     return true;
 }
 
+void UIManager_BeginFrame() { TextCache_Tick(); }
+
 void UIManager_Shutdown() {
-    if (s_fontLg) { TTF_CloseFont(s_fontLg); s_fontLg = nullptr; }
-    if (s_fontMd) { TTF_CloseFont(s_fontMd); s_fontMd = nullptr; }
-    if (s_fontSm) { TTF_CloseFont(s_fontSm); s_fontSm = nullptr; }
-    for (int i = 0; i < ICON_COUNT; i++)
-        if (s_icons[i]) { SDL_DestroyTexture(s_icons[i]); s_icons[i] = nullptr; }
-    if (s_titleSign) { SDL_DestroyTexture(s_titleSign); s_titleSign = nullptr; }
-    for (int i = 0; i < 5; i++) {
-        if (s_charP1[i]) { SDL_DestroyTexture(s_charP1[i]); s_charP1[i] = nullptr; }
-        if (s_charP2[i]) { SDL_DestroyTexture(s_charP2[i]); s_charP2[i] = nullptr; }
-    }
-    TTF_Quit();
-    s_renderer = nullptr;
-}
-
-// ── Cozy helpers ──────────────────────────────────────────────────
-
-// Vẽ icon từ texture cache với alpha tùy chọn
-static void DrawIcon(SDL_Renderer* r, IconID id, int cx, int cy, int size, Uint8 alpha = 255) {
-    if (id < 0 || id >= ICON_COUNT || !s_icons[id]) return;
-    SDL_SetTextureAlphaMod(s_icons[id], alpha);
-    SDL_Rect dst = { cx - size/2, cy - size/2, size, size };
-    SDL_RenderCopy(r, s_icons[id], nullptr, &dst);
-    SDL_SetTextureAlphaMod(s_icons[id], 255);
-}
-
-// Vẽ character portrait bằng cách composite nhiều layer lên nhau
-// Sprite sheet idle: 2 cột × 3 hàng — dùng frame 0 (góc trên-trái)
-static void DrawCharPortrait(SDL_Renderer* r, SDL_Texture** layers, int x, int y, int size) {
-    if (!layers[0]) return;
-    int tw = 1, th = 1;
-    SDL_QueryTexture(layers[0], nullptr, nullptr, &tw, &th);
-    // Idle sheet: 2 cols × 3 rows
-    SDL_Rect src = { 0, 0, tw / 2, th / 3 };
-    SDL_Rect dst = { x, y, size, size };
-    for (int i = 0; i < 5; i++)
-        if (layers[i]) SDL_RenderCopy(r, layers[i], &src, &dst);
-}
-
-// Vẽ panel bo góc (rounded corners) với fill semi-transparent
-// Kỹ thuật: 3 SDL_RenderFillRect tạo hình chữ thập + 4 góc tô thủ công bằng scanline
-static void DrawCozyPanel(SDL_Renderer* r, int x, int y, int w, int h, bool highlighted = false) {
-    const int R = 10;  // bán kính góc bo
-
-    // Màu fill: semi-transparent để background (sky) thấu qua nhẹ
-    SDL_Color fill   = highlighted
-        ? SDL_Color{232, 198, 58, 235}    // gold khi selected
-        : SDL_Color{255, 248, 230, 195};  // kem trắng semi-transparent
-    SDL_Color border = highlighted ? COZY_GOLD : COZY_WOOD_DARK;
-
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, fill.r, fill.g, fill.b, fill.a);
-
-    // 3 rects: trên-dưới (bỏ góc) và giữa (full width)
-    SDL_Rect rv = {x+R, y,   w-2*R, h  };  SDL_RenderFillRect(r, &rv); // thân đứng
-    SDL_Rect rh = {x,   y+R, w,     h-2*R}; SDL_RenderFillRect(r, &rh); // thân ngang
-    // Tô 4 góc bằng scanline hình tròn
-    for (int dy = 0; dy < R; dy++) {
-        int dx = R - static_cast<int>(std::sqrt(static_cast<float>(R*R - (R-dy)*(R-dy))));
-        SDL_RenderDrawLine(r, x+dx,   y+dy,     x+R-1,   y+dy);     // góc trên-trái
-        SDL_RenderDrawLine(r, x+w-R,  y+dy,     x+w-dx-1,y+dy);     // góc trên-phải
-        SDL_RenderDrawLine(r, x+dx,   y+h-dy-1, x+R-1,   y+h-dy-1); // góc dưới-trái
-        SDL_RenderDrawLine(r, x+w-R,  y+h-dy-1, x+w-dx-1,y+h-dy-1); // góc dưới-phải
-    }
-
-    // Border viền ngoài theo đường tròn góc
-    SDL_SetRenderDrawColor(r, border.r, border.g, border.b, 255);
-    SDL_RenderDrawLine(r, x+R,   y,     x+w-R, y);      // top
-    SDL_RenderDrawLine(r, x+R,   y+h,   x+w-R, y+h);    // bottom
-    SDL_RenderDrawLine(r, x,     y+R,   x,     y+h-R);  // left
-    SDL_RenderDrawLine(r, x+w,   y+R,   x+w,   y+h-R);  // right
-    // 4 góc border (arc thủ công)
-    for (int dy = 0; dy < R; dy++) {
-        int dx = R - static_cast<int>(std::sqrt(static_cast<float>(R*R - (R-dy)*(R-dy))));
-        SDL_RenderDrawPoint(r, x+dx,   y+dy);       // top-left
-        SDL_RenderDrawPoint(r, x+w-dx, y+dy);       // top-right
-        SDL_RenderDrawPoint(r, x+dx,   y+h-dy);     // bot-left
-        SDL_RenderDrawPoint(r, x+w-dx, y+h-dy);     // bot-right
-    }
-
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-}
-
-void UIManager_RenderText(SDL_Renderer* r, const char* text,
-                          int x, int y, SDL_Color color,
-                          bool center, int fontSize) {
-    TTF_Font* f = (fontSize >= 2) ? s_fontLg
-                : (fontSize == 1) ? s_fontMd
-                :                   s_fontSm;
-    RT(r, f, text, x, y, color, center);
-}
-
-// ── Menu ─────────────────────────────────────────────────────────
-void UIManager_ShowMenu() {
-    s_menuSel          = 0;
-    s_menuHue          = 0.0f;
-    s_showResult       = false;
-    s_pendingMenuState = STATE_MENU;
-    s_pendingDelay     = 0.0f;
-    for (int i = 0; i < MENU_COUNT; i++) {
-        s_menuHoverScale[i] = 0.0f;
-        s_menuBounce[i]     = 0.0f;
-    }
-}
-
-// Mỗi frame: cập nhật tất cả animation nút, xử lý deferred transition
-// Trả về STATE_MENU bình thường, trả về state khác khi bounce xong → App chuyển màn
-AppState UIManager_UpdateMenu(float dt) {
-    s_menuHue = fmodf(s_menuHue + 80.0f * dt, 360.0f);
-
-    for (int i = 0; i < MENU_COUNT; i++) {
-        // Hover scale: lerp mượt về 1.0 khi hover, về 0.0 khi không
-        float target = (i == s_menuSel) ? 1.0f : 0.0f;
-        s_menuHoverScale[i] += (target - s_menuHoverScale[i]) * 12.0f * dt;
-
-        // Bounce: đếm ngược, clamp về 0
-        if (s_menuBounce[i] > 0.0f) {
-            s_menuBounce[i] -= dt;
-            if (s_menuBounce[i] < 0.0f) s_menuBounce[i] = 0.0f;
+    for (int i = 0; i < UI_TEX_COUNT; i++) {
+        for (int st = 0; st < 4; st++) {
+            if (s_uiTex[i][st]) { SDL_DestroyTexture(s_uiTex[i][st]); s_uiTex[i][st] = nullptr; }
         }
     }
+    if (s_titleSign400)  { SDL_DestroyTexture(s_titleSign400);  s_titleSign400  = nullptr; }
+    if (s_titleSign320)  { SDL_DestroyTexture(s_titleSign320);  s_titleSign320  = nullptr; }
+    if (s_creditsSign240){ SDL_DestroyTexture(s_creditsSign240);s_creditsSign240= nullptr; }
+    for (int k = 0; k < 2; k++) {
+        for (int st = 0; st < 4; st++) {
+            if (s_soundToggleTex[k][st]) {
+                SDL_DestroyTexture(s_soundToggleTex[k][st]);
+                s_soundToggleTex[k][st] = nullptr;
+            }
+        }
+    }
+    for (int i = 0; i < ICON_COUNT; i++) {
+        if (s_icons[i]) { SDL_DestroyTexture(s_icons[i]); s_icons[i] = nullptr; }
+    }
+    if (s_hudPlaqueP1){ SDL_DestroyTexture(s_hudPlaqueP1);s_hudPlaqueP1= nullptr; }
+    if (s_hudPlaqueP2){ SDL_DestroyTexture(s_hudPlaqueP2);s_hudPlaqueP2= nullptr; }
+    if (s_turnBanner) { SDL_DestroyTexture(s_turnBanner); s_turnBanner = nullptr; }
+    if (s_panelGlow)    { SDL_DestroyTexture(s_panelGlow);    s_panelGlow    = nullptr; }
+    if (s_panelStakeP1) { SDL_DestroyTexture(s_panelStakeP1); s_panelStakeP1 = nullptr; }
+    if (s_panelStakeP2) { SDL_DestroyTexture(s_panelStakeP2); s_panelStakeP2 = nullptr; }
+    if (s_splashBg)   { SDL_DestroyTexture(s_splashBg);   s_splashBg   = nullptr; }
+    if (s_menuBg)     { SDL_DestroyTexture(s_menuBg);     s_menuBg     = nullptr; }
+    if (s_settingsBg) { SDL_DestroyTexture(s_settingsBg); s_settingsBg = nullptr; }
+    if (s_loadBg)     { SDL_DestroyTexture(s_loadBg);     s_loadBg     = nullptr; }
+    TextCache_Clear();
+    TTF_CloseFont(s_fontXL); s_fontXL = nullptr;
+    TTF_CloseFont(s_fontLg); s_fontLg = nullptr;
+    TTF_CloseFont(s_fontMd); s_fontMd = nullptr;
+    TTF_CloseFont(s_fontSm); s_fontSm = nullptr;
+    TTF_Quit();
+}
 
-    // Khi deferred delay hết hạn → thực sự chuyển màn hình
+static const int MN_PANEL_X  = 40;
+static const int MN_PANEL_W  = 680;
+static const int MN_SIGN_CX  = 360;
+static const int MN_SIGN_W   = 400;
+static const int MN_SIGN_H   = 90;
+static const int MN_SIGN_TOP = 210;
+static const int MN_BTN_X    = 140;
+static const int MN_BTN_W    = 440;
+static const int MN_BTN_H    = 90;
+static const int MN_BTN_YS[4] = {420, 540, 660, 780};
+static const int MN_HTP_X = 140, MN_HTP_Y = 884, MN_HTP_W = 440, MN_HTP_H = 58;
+
+static const int MN_CR_X = 1620, MN_CR_Y = 100, MN_CR_W = 240, MN_CR_H = 80;
+
+static const int MN_SND_Y = 990;
+
+void UIManager_ShowMenu() {
+    s_menuSel = 0;
+    memset(s_menuBtnState, 0, sizeof(s_menuBtnState));
+    memset(s_menuBounce,   0, sizeof(s_menuBounce));
+    s_pendingState = STATE_MENU;
+    s_pendingDelay = 0.0f;
+    s_showCredits  = false;
+    s_showHowTo    = false;
+    s_htpBtnState  = 0;
+    s_soundBtnState = 0;
+}
+
+AppState UIManager_UpdateMenu(float dt) {
+    for (int i = 0; i < MENU_COUNT; i++) {
+        if (s_menuBounce[i] > 0.0f) s_menuBounce[i] -= dt;
+    }
     if (s_pendingDelay > 0.0f) {
         s_pendingDelay -= dt;
-        if (s_pendingDelay <= 0.0f) {
-            AppState result    = s_pendingMenuState;
-            s_pendingMenuState = STATE_MENU;
-            s_pendingDelay     = 0.0f;
-            return result;
-        }
+        if (s_pendingDelay <= 0.0f) return s_pendingState;
     }
-
     return STATE_MENU;
 }
 
 void UIManager_RenderMenu(SDL_Renderer* r) {
-    // Title: dùng title_sign.jpg nếu có, fallback sang text vàng
-    if (s_titleSign) {
-        int tw = 1, th = 1;
-        SDL_QueryTexture(s_titleSign, nullptr, nullptr, &tw, &th);
-        int signH = 130;
-        int signW = tw * signH / th;
-        SDL_Rect dst = { WINDOW_WIDTH/2 - signW/2, 20, signW, signH };
-        SDL_RenderCopy(r, s_titleSign, nullptr, &dst);
-    } else {
-        // Vàng nhạt + text-shadow để nổi bật trên sky background
-        RT(r, s_fontLg, "CO CARO  -  GOMOKU",
-           WINDOW_WIDTH/2 + 2, 107, {80, 50, 10, 180}, true);  // shadow
-        RT(r, s_fontLg, "CO CARO  -  GOMOKU",
-           WINDOW_WIDTH/2, 105, {255, 242, 160, 255}, true);    // text vàng
+    if (s_menuBg) DrawCover(r, s_menuBg);
+    else { Renderer_DrawMatchBackground(r); Renderer_DrawForeground(r); }
+
+    int panelRight = MN_PANEL_X + MN_PANEL_W;
+    FillRect(r, 0, 0, panelRight, WINDOW_HEIGHT,
+             {DT_DEEP.r, DT_DEEP.g, DT_DEEP.b, 150});
+
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    for (int i = 0; i < 40; i++) {
+        Uint8 a = (Uint8)(210 - i * 5);
+        SDL_SetRenderDrawColor(r, DT_DEEP.r, DT_DEEP.g, DT_DEEP.b, a);
+        SDL_RenderDrawLine(r, panelRight + i, 0, panelRight + i, WINDOW_HEIGHT);
     }
 
-    const int CX  = WINDOW_WIDTH / 2;
-    const int BW  = 310;   // chiều rộng nút cơ bản
-    const int BH  = 46;    // chiều cao nút cơ bản
+    FillRect(r, 0, 0, MN_PANEL_X, WINDOW_HEIGHT,
+             {DT_WOOD.r, DT_WOOD.g, DT_WOOD.b, 220});
+    OutlineRect(r, MN_PANEL_X, 0, 2, WINDOW_HEIGHT, DT_LINE, 1);
 
-    // Giãn cách đều: chia đều MENU_COUNT nút vào khoảng y=[215, 620]
-    // Mỗi nút được định vị bằng tọa độ TÂM (centerY) để scale không bị lệch
-    const int Y_TOP = 215;
-    const int Y_BOT = 620;
-    const int STEP  = (MENU_COUNT > 1) ? (Y_BOT - Y_TOP) / (MENU_COUNT - 1) : 0;
+    DrawHangingSign(r, MN_SIGN_CX, MN_SIGN_TOP, MN_SIGN_W, MN_SIGN_H, "Berry Grove");
 
     for (int i = 0; i < MENU_COUNT; i++) {
-        int centerY = Y_TOP + i * STEP;
-
-        // ── Tính scale tổng hợp ─────────────────────────────────
-        // Hover: phóng to tối đa 9% khi con trỏ ở trên nút
-        float hScale = 1.0f + 0.09f * s_menuHoverScale[i];
-
-        // Bounce: khi click → nút "nhún" xuống (scale giảm) rồi nảy lên
-        // Dùng sin(progress * PI): dips ở giữa rồi trở về 1.0 khi kết thúc
-        float bScale = 1.0f;
+        int by = MN_BTN_YS[i];
         if (s_menuBounce[i] > 0.0f) {
-            float progress = 1.0f - s_menuBounce[i] / 0.20f;  // 0→1 trong 0.20s
-            bScale = 1.0f - 0.16f * sinf(progress * 3.14159f);
+            float t = 1.0f - s_menuBounce[i] / 0.18f;
+            by += (int)(std::sin(t * 3.14159f) * 5.0f);
         }
-
-        float scale = hScale * bScale;
-
-        // ── Kích thước và vị trí sau scale ──────────────────────
-        int w  = (int)(BW * scale);
-        int h  = (int)(BH * scale);
-        int bx = CX - w / 2;
-        int by = centerY - h / 2;
-        bool sel = (i == s_menuSel);
-        DrawCozyPanel(r, bx, by, w, h, sel);
-        SDL_Color tc = sel ? COZY_GOLD : COZY_TEXT_DARK;
-        RT(r, s_fontMd, MENU_ITEMS[i], CX, by + h/2 - 11, tc, true);
+        DrawButton(r, MN_BTN_X, by, MN_BTN_W, MN_BTN_H, s_menuBtnState[i], MENU_ITEMS[i]);
     }
 
-    RT(r, s_fontSm, "Arrow keys / mouse   Enter / click to select",
-       CX, WINDOW_HEIGHT - 48, COZY_TEXT_DARK, true);
+    DrawButton(r, MN_HTP_X, MN_HTP_Y, MN_HTP_W, MN_HTP_H, s_htpBtnState, "How To Play");
+
+    DrawSoundToggle(r, 190, MN_SND_Y, 44, AudioManager_IsMuted(), s_soundBtnState);
+
+    int ccx = MN_CR_X + MN_CR_W / 2;
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, DT_LINE.r, DT_LINE.g, DT_LINE.b, 180);
+    SDL_RenderDrawLine(r, ccx, 0, ccx, MN_CR_Y);
+    for (int ry = 8; ry < MN_CR_Y; ry += 12) {
+        SDL_Rect ring = {ccx - 3, ry, 6, 5};
+        SDL_RenderFillRect(r, &ring);
+    }
+    if (s_creditsSign240) {
+        DrawTextureRect(r, s_creditsSign240, MN_CR_X, MN_CR_Y, MN_CR_W, MN_CR_H);
+    } else {
+        FillRect(r, MN_CR_X, MN_CR_Y, MN_CR_W, MN_CR_H, DT_WOOD);
+        FillRect(r, MN_CR_X+2, MN_CR_Y+1, MN_CR_W-4, 2,
+                 {DT_WARM.r, DT_WARM.g, DT_WARM.b, 140});
+        OutlineRect(r, MN_CR_X, MN_CR_Y, MN_CR_W, MN_CR_H, DT_LINE, 2);
+    }
+    RTO(r, s_fontSm, "Credits", ccx, MN_CR_Y + MN_CR_H/2,
+        {58, 32, 14, 255}, true, {255, 248, 232, 225});
+
+    if (s_showCredits) {
+        FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0, 0, 0, 180});
+        const int cw = 760, ch = 460;
+        const int cxp = WINDOW_WIDTH/2 - cw/2, cyp = WINDOW_HEIGHT/2 - ch/2;
+        DrawPanel(r, cxp, cyp, cw, ch);
+        int ty = cyp + 60;
+        RT(r, s_fontLg, "Credits",                              WINDOW_WIDTH/2, ty, DT_WARM,  true); ty += 78;
+        RT(r, s_fontLg, "Berry Grove",                          WINDOW_WIDTH/2, ty, DT_LIGHT, true); ty += 56;
+        RT(r, s_fontMd, "A cozy five-in-a-row strategy game",   WINDOW_WIDTH/2, ty, DT_OFF,   true); ty += 64;
+        RT(r, s_fontMd, "Built with SDL2 and C++",              WINDOW_WIDTH/2, ty, DT_OFF,   true); ty += 44;
+        RT(r, s_fontMd, "24120472 - Truong Hue Tri",            WINDOW_WIDTH/2, ty, DT_OFF,   true);
+        RT(r, s_fontSm, "Click anywhere to close",              WINDOW_WIDTH/2, cyp + ch - 44, DT_WARM, true);
+    }
+
+    if (s_showHowTo) {
+        FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0, 0, 0, 185});
+        const int cw = 900, ch = 660;
+        const int cxp = WINDOW_WIDTH/2 - cw/2, cyp = WINDOW_HEIGHT/2 - ch/2;
+        DrawPanel(r, cxp, cyp, cw, ch);
+        RT(r, s_fontLg, "How To Play", WINDOW_WIDTH/2, cyp + 52, DT_WARM, true);
+        RT(r, s_fontSm, "Plant berries. Grow five in a row. Harvest the grove.",
+           WINDOW_WIDTH/2, cyp + 100, DT_OFF, true);
+
+        const int lx = cxp + 70; int ly = cyp + 158;
+        const char* rules[5] = {
+            "1.  Plant a berry on an empty soil patch.",
+            "2.  Take turns as Strawberry and Blueberry.",
+            "3.  Grow five berries in a row to harvest the grove.",
+            "4.  Rows can be horizontal, vertical, or diagonal.",
+            "5.  If every patch is filled, the grove is full.",
+        };
+        for (int i = 0; i < 5; i++) { RT(r, s_fontMd, rules[i], lx, ly, DT_LIGHT, false); ly += 48; }
+
+        ly += 18;
+        RT(r, s_fontMd, "Controls", lx, ly, DT_WARM, false); ly += 44;
+        DrawKeycap(r, lx, ly - 22, 96, 44, "Click", "plant a berry"); ly += 48;
+        DrawKeycap(r, lx, ly - 22, 96, 44, "ESC", "pause / back"); ly += 48;
+        DrawKeycap(r, lx, ly - 22, 44, 44, "R", "play again after the grove is harvested");
+
+        RT(r, s_fontSm, "Click anywhere to close", WINDOW_WIDTH/2, cyp + ch - 40, DT_WARM, true);
+    }
 }
 
 AppState UIManager_HandleMenuEvent(const SDL_Event& e) {
-    if (e.type == SDL_KEYDOWN) {
-        switch (e.key.keysym.sym) {
-        case SDLK_UP:   s_menuSel = (s_menuSel + MENU_COUNT - 1) % MENU_COUNT; return STATE_MENU;
-        case SDLK_DOWN: s_menuSel = (s_menuSel + 1) % MENU_COUNT;              return STATE_MENU;
-        case SDLK_RETURN: case SDLK_KP_ENTER: goto CONFIRM;
-        default: break;
-        }
-    } else if (e.type == SDL_MOUSEMOTION) {
-        const int CX=WINDOW_WIDTH/2, BW=310, BH=46;
-        const int STEP = (MENU_COUNT > 1) ? (620-215)/(MENU_COUNT-1) : 0;
-        for (int i = 0; i < MENU_COUNT; i++) {
-            int centerY = 215 + i * STEP;
-            SDL_Rect b = { CX-BW/2, centerY-BH/2, BW, BH };
-            if (e.motion.x>=b.x && e.motion.x<=b.x+b.w &&
-                e.motion.y>=b.y && e.motion.y<=b.y+b.h)
-                s_menuSel = i;
-        }
-    } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-        const int CX=WINDOW_WIDTH/2, BW=310, BH=46;
-        const int STEP = (MENU_COUNT > 1) ? (620-215)/(MENU_COUNT-1) : 0;
-        for (int i = 0; i < MENU_COUNT; i++) {
-            int centerY = 215 + i * STEP;
-            SDL_Rect b = { CX-BW/2, centerY-BH/2, BW, BH };
-            if (e.button.x>=b.x && e.button.x<=b.x+b.w &&
-                e.button.y>=b.y && e.button.y<=b.y+b.h)
-                { s_menuSel = i; goto CONFIRM; }
-        }
-    }
-    return STATE_MENU;
-
-CONFIRM:
-    // Kích hoạt bounce animation, defer transition 0.20s để bounce chạy xong
-    {
-        AppState target = STATE_MENU;
-        switch (s_menuSel) {
-        case 0: s_pendingMode = MODE_PVP; target = STATE_NAME_INPUT; break;
-        case 1: s_pendingMode = MODE_PVE; target = STATE_NAME_INPUT; break;
-        case 2: target = STATE_LOAD_GAME; break;
-        case 3: target = STATE_SETTINGS;  break;
-        case 4: target = STATE_EXIT;      break;
-        }
-        if (target != STATE_MENU) {
-            s_menuBounce[s_menuSel] = 0.20f;   // bắt đầu bounce
-            s_pendingMenuState      = target;
-            s_pendingDelay          = 0.20f;   // chờ bounce xong rồi chuyển
-        }
-    }
-    return STATE_MENU;
-}
-
-// ── Name Input ────────────────────────────────────────────────────
-void UIManager_ShowNameInput(_GAMESTATE& state) {
-    s_ni.mode  = s_pendingMode;
-    s_ni.diff  = AI_MEDIUM;
-    s_ni.field = 0;
-    strncpy_s(s_ni.p1, sizeof(s_ni.p1), state.players[0].name, _TRUNCATE);
-    strncpy_s(s_ni.p2, sizeof(s_ni.p2), state.players[1].name, _TRUNCATE);
-    SDL_StartTextInput();
-}
-
-void UIManager_RenderNameInput(SDL_Renderer* r) {
-    RT(r, s_fontLg, "Player Setup", WINDOW_WIDTH/2, 75, COZY_WOOD_DARK, true);
-
-    const int LX = WINDOW_WIDTH/2 - 190;
-    const int FW = 380, FH = 38;
-    int y = 155;
-
-    // Vẽ field với label — cozy parchment style
-    auto Field = [&](const char* label, char* buf, int idx) {
-        RT(r, s_fontSm, label, LX, y, COZY_TEXT_DARK);
-        y += 24;
-        bool act = (s_ni.field == idx);
-        DrawCozyPanel(r, LX, y, FW, FH, act);
-        char disp[34]; snprintf(disp, sizeof(disp), "%s%s", buf, act ? "_" : "");
-        RT(r, s_fontMd, disp, LX+8, y+6, COZY_TEXT_DARK);
-        y += FH + 18;
+    static const AppState TARGETS[4] = {
+        STATE_NAME_INPUT, STATE_LOAD_GAME, STATE_SETTINGS, STATE_EXIT
     };
 
-    Field("Player 1 Name:", s_ni.p1, 0);
-
-    if (s_ni.mode == MODE_PVP) {
-        Field("Player 2 Name:", s_ni.p2, 1);
-    } else {
-        RT(r, s_fontSm, "AI Difficulty:", LX, y, {170,170,170,255});
-        y += 24;
-
-        // Arrow selector: [<]  MEDIUM  [>]
-        // Nhấn mũi tên trái/phải (hoặc click) để chuyển độ khó
-        static const char* diffs[] = { "EASY", "MEDIUM", "HARD" };
-        static const int   dvals[] = { AI_EASY, AI_MEDIUM, AI_HARD };
-        int curIdx = 1;
-        for (int i = 0; i < 3; i++) if (s_ni.diff == dvals[i]) { curIdx = i; break; }
-
-        bool act = (s_ni.field == 1);
-        SDL_Color arrowC = act ? SDL_Color{255,235,60,255} : SDL_Color{130,130,130,255};
-
-        // Arrow selector dùng icon sprites
-        DrawCozyPanel(r, LX,       y, 44,       FH, act);
-        DrawIcon(r, ICON_ARROW_L, LX+22,     y+FH/2, 28);
-
-        DrawCozyPanel(r, LX+52,    y, FW-104,  FH, act);
-        SDL_Color diffC = curIdx==0 ? COZY_GREEN : curIdx==1 ? COZY_GOLD : COZY_RED;
-        RT(r, s_fontMd, diffs[curIdx], LX+52+(FW-104)/2, y+7, diffC, true);
-
-        DrawCozyPanel(r, LX+FW-44, y, 44,       FH, act);
-        DrawIcon(r, ICON_ARROW_R, LX+FW-22,  y+FH/2, 28);
-
-        y += FH + 18;
-    }
-
-    // Start button — cozy style
-    {
-        bool sel = (s_ni.field == 2);
-        DrawCozyPanel(r, WINDOW_WIDTH/2-95, y, 190, 46, sel);
-        RT(r, s_fontMd, "Start Game", WINDOW_WIDTH/2, y+12, sel ? COZY_GOLD : COZY_TEXT_DARK, true);
-    }
-
-    RT(r, s_fontSm, "Tab: next field   Left/Right: doi do kho   Enter: start   ESC: back",
-       WINDOW_WIDTH/2, WINDOW_HEIGHT-55, COZY_TEXT_DARK, true);
-}
-
-AppState UIManager_HandleNameInputEvent(const SDL_Event& e, _GAMESTATE& state) {
-    int nFields = (s_ni.mode == MODE_PVP) ? 3 : 2;   // P1, P2 or diff, start
-
-    if (e.type == SDL_KEYDOWN) {
-        switch (e.key.keysym.sym) {
-        case SDLK_ESCAPE:
-            SDL_StopTextInput();
-            return STATE_MENU;
-        case SDLK_TAB:
-            s_ni.field = (s_ni.field + 1) % nFields;
-            return STATE_NAME_INPUT;
-        case SDLK_RETURN: case SDLK_KP_ENTER:
-            goto DO_START;
-        case SDLK_BACKSPACE:
-            if (s_ni.field == 0 && s_ni.p1[0]) s_ni.p1[strlen(s_ni.p1)-1] = '\0';
-            if (s_ni.field == 1 && s_ni.mode == MODE_PVP && s_ni.p2[0])
-                s_ni.p2[strlen(s_ni.p2)-1] = '\0';
-            break;
-        case SDLK_LEFT:
-        case SDLK_RIGHT:
-            // Khi đang ở field độ khó (PVE, field==1): mũi tên trái/phải đổi mức
-            if (s_ni.mode == MODE_PVE && s_ni.field == 1) {
-                static const int dvals[] = { AI_EASY, AI_MEDIUM, AI_HARD };
-                int cur = 1;
-                for (int i = 0; i < 3; i++) if (s_ni.diff == dvals[i]) { cur = i; break; }
-                cur = (e.key.keysym.sym == SDLK_LEFT)
-                      ? (cur + 2) % 3
-                      : (cur + 1) % 3;
-                s_ni.diff = dvals[cur];
-            }
-            break;
-        default: break;
+    if (s_showCredits) {
+        if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_KEYDOWN) {
+            s_showCredits = false;
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
         }
-    } else if (e.type == SDL_TEXTINPUT) {
-        if (s_ni.field == 0 && strlen(s_ni.p1) < 28)
-            strncat_s(s_ni.p1, sizeof(s_ni.p1), e.text.text, _TRUNCATE);
-        else if (s_ni.field == 1 && s_ni.mode == MODE_PVP && strlen(s_ni.p2) < 28)
-            strncat_s(s_ni.p2, sizeof(s_ni.p2), e.text.text, _TRUNCATE);
-    } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-        // Arrow selector cho độ khó (PVE)
-        if (s_ni.mode == MODE_PVE) {
-            static const int dvals[] = { AI_EASY, AI_MEDIUM, AI_HARD };
-            const int LX2   = WINDOW_WIDTH/2 - 190;
-            const int FW2   = 380, FH2 = 38;
-            const int btnY  = 155 + 24 + 38 + 18 + 24;  // y sau Field P1Name + label diff
-            int cur = 1;
-            for (int i = 0; i < 3; i++) if (s_ni.diff == dvals[i]) { cur = i; break; }
-            SDL_Rect leftBtn  = { LX2,          btnY, 44, FH2 };
-            SDL_Rect rightBtn = { LX2+FW2-44,   btnY, 44, FH2 };
-            if (e.button.x>=leftBtn.x  && e.button.x<=leftBtn.x+leftBtn.w   &&
-                e.button.y>=leftBtn.y  && e.button.y<=leftBtn.y+leftBtn.h)
-                s_ni.diff = dvals[(cur + 2) % 3];
-            if (e.button.x>=rightBtn.x && e.button.x<=rightBtn.x+rightBtn.w &&
-                e.button.y>=rightBtn.y && e.button.y<=rightBtn.y+rightBtn.h)
-                s_ni.diff = dvals[(cur + 1) % 3];
-            s_ni.field = 1;  // focus về difficulty khi click vào selector
+        return STATE_MENU;
+    }
+    if (s_showHowTo) {
+        if (e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_KEYDOWN) {
+            s_showHowTo = false;
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
         }
-        // Start button (approximate position)
-        SDL_Rect startBtn = { WINDOW_WIDTH/2-95, WINDOW_HEIGHT-200, 190, 46 };
-        if (e.button.x>=startBtn.x && e.button.x<=startBtn.x+startBtn.w &&
-            e.button.y>=startBtn.y && e.button.y<=startBtn.y+startBtn.h)
-            goto DO_START;
-    }
-    return STATE_NAME_INPUT;
-
-DO_START:
-    SDL_StopTextInput();
-    if (s_ni.p1[0]) strncpy_s(state.players[0].name, sizeof(state.players[0].name), s_ni.p1, _TRUNCATE);
-    if (s_ni.mode == MODE_PVP) {
-        if (s_ni.p2[0]) strncpy_s(state.players[1].name, sizeof(state.players[1].name), s_ni.p2, _TRUNCATE);
-    } else {
-        strncpy_s(state.players[1].name, sizeof(state.players[1].name), "AI", _TRUNCATE);
-        state.difficulty = static_cast<AIDifficulty>(s_ni.diff);
-    }
-    state.mode = s_ni.mode;
-    return STATE_PLAYING;
-}
-
-// ── HUD: panel trái (P1) + panel phải (P2) ───────────────────────
-static void RenderPanel(SDL_Renderer* r, const _GAMESTATE& state, int pidx, int px, int pw) {
-    const int PY = BOARD_OFFSET_Y;
-    const int PH = BOARD_PIXEL_SIZE;
-
-    bool isTurn = (state.gameStatus == CHUA_KET_THUC) && (state.turn == (pidx == 0));
-
-    // Cozy parchment panel (highlighted khi đến lượt)
-    DrawCozyPanel(r, px, PY, pw, PH, isTurn);
-
-    // Avatar area
-    int avSide = pw - 24;
-    if (avSide > 150) avSide = 150;
-    int avX = px + (pw - avSide) / 2;
-    int avY = PY + 14;
-
-    // Vẽ character portrait nếu có sprite, fallback sang placeholder
-    SDL_Texture** charLayers = (pidx == 0) ? s_charP1 : s_charP2;
-    if (charLayers[0]) {
-        // Khung avatar cozy
-        SDL_SetRenderDrawColor(r, COZY_WOOD_DARK.r, COZY_WOOD_DARK.g, COZY_WOOD_DARK.b, 255);
-        SDL_Rect av = {avX, avY, avSide, avSide};
-        SDL_RenderDrawRect(r, &av);
-        // Character portrait (composite layers)
-        DrawCharPortrait(r, charLayers, avX+2, avY+2, avSide-4);
-    } else {
-        // Fallback placeholder
-        SDL_Color avBdr = (pidx==0) ? SDL_Color{178,50,24,255} : SDL_Color{50,90,178,255};
-        SDL_SetRenderDrawColor(r, COZY_PARCHMENT2.r, COZY_PARCHMENT2.g, COZY_PARCHMENT2.b, 255);
-        SDL_Rect av = {avX, avY, avSide, avSide};
-        SDL_RenderFillRect(r, &av);
-        SDL_SetRenderDrawColor(r, avBdr.r, avBdr.g, avBdr.b, 255);
-        SDL_RenderDrawRect(r, &av);
-        RT(r, s_fontLg, pidx==0 ? "X" : "O", avX+avSide/2, avY+avSide/2-17, avBdr, true);
+        return STATE_MENU;
     }
 
-    int y = avY + avSide + 12;
-
-    // Tên người chơi
-    SDL_Color nameC = (pidx==0) ? COZY_RED : SDL_Color{50,90,178,255};
-    RT(r, s_fontMd, state.players[pidx].name, px + pw/2, y, nameC, true);
-    y += 28;
-
-    // Thống kê
-    char buf[48];
-    // Trophy icon + số thắng
-    DrawIcon(r, ICON_TROPHY, px+18, y+10, 20);
-    snprintf(buf, sizeof(buf), "%d W | %d L", state.players[pidx].wins, state.players[pidx].losses);
-    RT(r, s_fontSm, buf, px+32, y, COZY_TEXT_DARK);
-    y += 22;
-
-    snprintf(buf, sizeof(buf), "Moves: %d", state.players[pidx].moves);
-    RT(r, s_fontSm, buf, px + pw/2, y, COZY_TEXT_DARK, true);
-    y += 28;
-
-    // Trạng thái lượt
-    if (isTurn) {
-        RT(r, s_fontSm, "YOUR TURN", px + pw/2, y, COZY_GOLD, true);
-    } else if (state.mode == MODE_PVE && pidx == 1 && state.aiThinking) {
-        RT(r, s_fontSm, "Thinking...", px + pw/2, y, COZY_WOOD_MID, true);
-    }
-
-    // Kết quả
-    if (s_showResult && s_resultMsg[0]) {
-        int ry = PY + PH - 80;
-        RT(r, s_fontSm, s_resultMsg, px + pw/2, ry, COZY_RED, true);
-        RT(r, s_fontSm, "R:replay  ESC:menu", px + pw/2, ry + 22, COZY_GOLD, true);
-    }
-
-    // Gợi ý phím P1
-    if (pidx == 0) {
-        int hy = PY + PH - (s_showResult ? 140 : 100);
-        const char* hints[] = { "WASD/Mouse:move", "Enter/Click:place", "L:save  T:load", "ESC:pause" };
-        for (auto h : hints) { RT(r, s_fontSm, h, px+6, hy, COZY_TEXT_DARK); hy += 20; }
-    }
-}
-
-void UIManager_RenderHUD(SDL_Renderer* r, const _GAMESTATE& state) {
-    RenderPanel(r, state, 0, LEFT_PANEL_X,  LEFT_PANEL_WIDTH);
-    RenderPanel(r, state, 1, HUD_PANEL_X, HUD_PANEL_WIDTH);
-}
-
-// ── Load screen ───────────────────────────────────────────────────
-static int s_loadAction = 0;   // 0=none, 1=load, 2=delete (btn hover)
-
-void UIManager_ShowLoadScreen() {
-    s_saves   = GetSaveFiles();
-    s_loadSel = 0;
-    s_loadAction = 0;
-}
-
-// Lấy tên file ngắn (bỏ đường dẫn) để hiển thị
-static std::string BaseName(const std::string& path) {
-    size_t pos = path.find_last_of("/\\");
-    return (pos == std::string::npos) ? path : path.substr(pos + 1);
-}
-
-void UIManager_RenderLoadScreen(SDL_Renderer* r) {
-    // Background vẽ bởi Renderer_DrawBackground
-
-    // Tiêu đề
-    RT(r, s_fontLg, "TAI GAME", WINDOW_WIDTH/2, 38, COZY_WOOD_DARK, true);
-
-    // Panel danh sách save
-    const int PX = 80, PY = 115, PW = 740, PH = 480;
-    SDL_SetRenderDrawColor(r, 16, 16, 42, 255);
-    SDL_Rect panel = {PX, PY, PW, PH};
-    SDL_RenderFillRect(r, &panel);
-    SDL_SetRenderDrawColor(r, 80, 62, 22, 255);
-    SDL_RenderDrawRect(r, &panel);
-
-    if (s_saves.empty()) {
-        RT(r, s_fontMd, "Khong tim thay file luu nao.",
-           WINDOW_WIDTH/2, PY + PH/2 - 12, {170,90,90,255}, true);
-    } else {
-        const int ROW_H = 52, ROW_PX = PX+14;
-        for (int i = 0; i < static_cast<int>(s_saves.size()); i++) {
-            bool sel = (i == s_loadSel);
-            int ry = PY + 14 + i * ROW_H;
-
-            if (sel) {
-                SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-                SDL_SetRenderDrawColor(r, 62, 62, 148, 195);
-                SDL_Rect bar = {ROW_PX, ry, PW-28, ROW_H-4};
-                SDL_RenderFillRect(r, &bar);
-                SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-                SDL_SetRenderDrawColor(r, 138, 105, 28, 255);
-                SDL_RenderDrawRect(r, &bar);
-            }
-
-            // Icon ▶ cho file được chọn
-            SDL_Color ic = sel ? SDL_Color{255,228,50,255} : SDL_Color{188,188,188,255};
-            RT(r, s_fontSm, sel ? "> " : "  ", ROW_PX+6, ry+16, ic);
-            RT(r, s_fontMd, BaseName(s_saves[i]).c_str(), ROW_PX+28, ry+14, ic);
-        }
-    }
-
-    // Cột nút bên phải
-    const int BX = PX + PW + 18, BY0 = PY, BW2 = 182, BH2 = 52;
-    // Action buttons — cozy style với icon
-    const char* btnLabels[] = { "TAI GAME", "XOA", "QUAY LAI" };
-    IconID btnIcons[] = { ICON_BOOK, ICON_TRASH, ICON_BACK };
-    for (int i = 0; i < 3; i++) {
-        int by = BY0 + i * (BH2 + 12);
-        bool hover = (s_loadAction == i+1);
-        DrawCozyPanel(r, BX, by, BW2, BH2, hover);
-        DrawIcon(r, btnIcons[i], BX+24, by+BH2/2, 26);
-        RT(r, s_fontMd, btnLabels[i], BX+BW2/2+8, by+14, hover ? COZY_GOLD : COZY_TEXT_DARK, true);
-    }
-
-    RT(r, s_fontSm, "Up/Down: chon   Enter: tai   Del: xoa   ESC: quay lai",
-       WINDOW_WIDTH/2, WINDOW_HEIGHT-32, COZY_TEXT_DARK, true);
-}
-
-AppState UIManager_HandleLoadEvent(const SDL_Event& e, _GAMESTATE& state) {
-    int n = static_cast<int>(s_saves.size());
-
-    // Hit-test nút bên phải
-    const int BX = 80+740+18, BY0 = 115, BW2 = 182, BH2 = 52;
-    auto HitBtn = [&](int i) {
-        int by = BY0 + i*(BH2+12);
-        return e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT
-            && e.button.x>=BX && e.button.x<=BX+BW2
-            && e.button.y>=by && e.button.y<=by+BH2;
-    };
-    auto HoverBtn = [&](int i) {
-        int by = BY0 + i*(BH2+12);
-        return e.type == SDL_MOUSEMOTION
-            && e.motion.x>=BX && e.motion.x<=BX+BW2
-            && e.motion.y>=by && e.motion.y<=by+BH2;
+    auto fireItem = [&](int i) {
+        s_menuBtnState[i] = 2;
+        s_menuBounce[i]   = 0.18f;
+        s_menuSel         = i;
+        s_pendingState    = TARGETS[i];
+        s_pendingDelay    = 0.20f;
+        AudioManager_PlaySFX(SFX_MENU_SELECT);
     };
 
     if (e.type == SDL_MOUSEMOTION) {
-        s_loadAction = 0;
-        for (int i=0;i<3;i++) if(HoverBtn(i)) s_loadAction=i+1;
+        for (int i = 0; i < MENU_COUNT; i++) {
+            SDL_Rect b = {MN_BTN_X, MN_BTN_YS[i], MN_BTN_W, MN_BTN_H};
+            bool hit = (e.motion.x>=b.x && e.motion.x<b.x+b.w &&
+                        e.motion.y>=b.y && e.motion.y<b.y+b.h);
+            if (hit) {
+                if (s_menuBtnState[i] == 0) AudioManager_PlaySFX(SFX_MENU_HOVER);
+                s_menuBtnState[i] = 1; s_menuSel = i;
+            }
+            else if (s_menuBtnState[i] == 1) s_menuBtnState[i] = 0;
+        }
+
+        int oldHtp = s_htpBtnState;
+        s_htpBtnState = (e.motion.x>=MN_HTP_X && e.motion.x<MN_HTP_X+MN_HTP_W &&
+                         e.motion.y>=MN_HTP_Y && e.motion.y<MN_HTP_Y+MN_HTP_H) ? 1 : 0;
+        if (oldHtp == 0 && s_htpBtnState == 1) AudioManager_PlaySFX(SFX_MENU_HOVER);
+
+        const int SND_X = 190, SND_S = 44;
+        int oldSound = s_soundBtnState;
+        s_soundBtnState = (e.motion.x>=SND_X-SND_S/2 && e.motion.x<SND_X+SND_S/2 &&
+                           e.motion.y>=MN_SND_Y-SND_S/2 && e.motion.y<MN_SND_Y+SND_S/2) ? 1 : 0;
+        if (oldSound == 0 && s_soundBtnState == 1) AudioManager_PlaySFX(SFX_MENU_HOVER);
     }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        for (int i = 0; i < MENU_COUNT; i++) {
+            SDL_Rect b = {MN_BTN_X, MN_BTN_YS[i], MN_BTN_W, MN_BTN_H};
+            if (e.button.x>=b.x && e.button.x<b.x+b.w &&
+                e.button.y>=b.y && e.button.y<b.y+b.h)
+                fireItem(i);
+        }
+
+        if (e.button.x>=MN_HTP_X && e.button.x<MN_HTP_X+MN_HTP_W &&
+            e.button.y>=MN_HTP_Y && e.button.y<MN_HTP_Y+MN_HTP_H) {
+            s_showHowTo = true;
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+        }
+
+        if (e.button.x>=MN_CR_X && e.button.x<MN_CR_X+MN_CR_W &&
+            e.button.y>=MN_CR_Y && e.button.y<MN_CR_Y+MN_CR_H) {
+            s_showCredits = true;
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+        }
+
+        {
+            const int SND_X = 190, SND_S = 44;
+            if (e.button.x>=SND_X-SND_S/2 && e.button.x<SND_X+SND_S/2 &&
+                e.button.y>=MN_SND_Y-SND_S/2 && e.button.y<MN_SND_Y+SND_S/2) {
+                s_soundBtnState = 2;
+                bool nowMuted = !AudioManager_IsMuted();
+                if (!nowMuted) AudioManager_SetMuted(false);
+                AudioManager_PlaySFX(SFX_MENU_SELECT);
+                if (nowMuted) AudioManager_SetMuted(true);
+            }
+        }
+    }
+    if (e.type == SDL_MOUSEBUTTONUP) {
+        for (int i = 0; i < MENU_COUNT; i++)
+            if (s_menuBtnState[i] == 2) s_menuBtnState[i] = 1;
+        if (s_soundBtnState == 2) s_soundBtnState = 1;
+    }
+    if (e.type == SDL_KEYDOWN) {
+        switch (e.key.keysym.sym) {
+        case SDLK_UP:   s_menuSel = (s_menuSel-1+MENU_COUNT)%MENU_COUNT; AudioManager_PlaySFX(SFX_MENU_HOVER); break;
+        case SDLK_DOWN: s_menuSel = (s_menuSel+1)%MENU_COUNT; AudioManager_PlaySFX(SFX_MENU_HOVER); break;
+        case SDLK_RETURN: case SDLK_SPACE: fireItem(s_menuSel); break;
+        case SDLK_h: s_showHowTo = true; AudioManager_PlaySFX(SFX_MENU_SELECT); break;
+        case SDLK_ESCAPE: s_pendingState = STATE_EXIT; s_pendingDelay = 0.10f; AudioManager_PlaySFX(SFX_MENU_SELECT); break;
+        }
+    }
+    return STATE_MENU;
+}
+
+static const int NI_PNL_X = WINDOW_WIDTH/2 - 380;
+static const int NI_PNL_W = 760;
+static const int NI_PNL_H = 620;
+static const int NI_PNL_Y = (WINDOW_HEIGHT - NI_PNL_H)/2;
+static const int NI_FX    = NI_PNL_X + DT_XXL;
+static const int NI_FW    = NI_PNL_W - DT_XXL*2;
+static const int NI_FH    = 56;
+
+void UIManager_ShowNameInput(_GAMESTATE& state) {
+    s_ni.mode  = state.mode;
+    s_ni.diff  = state.difficulty;
+    s_ni.field = 0;
+    memcpy(s_ni.p1, state.players[0].name, 29); s_ni.p1[29] = '\0';
+    memcpy(s_ni.p2, state.players[1].name, 29); s_ni.p2[29] = '\0';
+}
+
+void UIManager_RenderNameInput(SDL_Renderer* r) {
+    Renderer_DrawMatchBackground(r);
+    FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0,0,0,150});
+
+    DrawPanel(r, NI_PNL_X, NI_PNL_Y, NI_PNL_W, NI_PNL_H);
+
+    DrawHangingSign(r, WINDOW_WIDTH/2, NI_PNL_Y - 8, 320, 90, "New Game");
+
+    int fy = NI_PNL_Y + 130;
+
+    RT(r, s_fontSm, "Mode:", NI_FX, fy, DT_LIGHT, false);
+    fy += DT_L;
+    DrawButton(r, NI_FX,           fy, NI_FW/2 - DT_S, NI_FH,
+               s_ni.mode == MODE_PVP ? 1 : 0, "PvP");
+    DrawButton(r, NI_FX + NI_FW/2, fy, NI_FW/2 - DT_S, NI_FH,
+               s_ni.mode == MODE_PVE ? 1 : 0, "PvE");
+    fy += NI_FH + DT_L;
+
+    RT(r, s_fontSm, "Player 1 name:", NI_FX, fy, DT_LIGHT, false);
+    fy += DT_L * 2;
+    FillRect(r, NI_FX, fy - NI_FH/2, NI_FW, NI_FH,
+             s_ni.field == 0 ? SDL_Color{DT_WOOD.r, DT_WOOD.g, DT_WOOD.b, 220}
+                             : SDL_Color{DT_DEEP.r, DT_DEEP.g, DT_DEEP.b, 180});
+    OutlineRect(r, NI_FX, fy - NI_FH/2, NI_FW, NI_FH,
+                s_ni.field == 0 ? DT_WARM : DT_LINE, 2);
+    RT(r, s_fontMd, s_ni.p1, NI_FX + DT_M, fy, DT_LIGHT, false);
+    fy += NI_FH + DT_L;
+
+    if (s_ni.mode == MODE_PVP) {
+        RT(r, s_fontSm, "Player 2 name:", NI_FX, fy, DT_LIGHT, false);
+        fy += DT_L * 2;
+        FillRect(r, NI_FX, fy - NI_FH/2, NI_FW, NI_FH,
+                 s_ni.field == 1 ? SDL_Color{DT_WOOD.r, DT_WOOD.g, DT_WOOD.b, 220}
+                                 : SDL_Color{DT_DEEP.r, DT_DEEP.g, DT_DEEP.b, 180});
+        OutlineRect(r, NI_FX, fy - NI_FH/2, NI_FW, NI_FH,
+                    s_ni.field == 1 ? DT_WARM : DT_LINE, 2);
+        RT(r, s_fontMd, s_ni.p2, NI_FX + DT_M, fy, DT_LIGHT, false);
+    } else {
+        RT(r, s_fontSm, "AI Difficulty:", NI_FX, fy, DT_LIGHT, false);
+        fy += DT_L * 2;
+
+        const char* diffLabels[3] = { "Easy", "Medium", "Hard" };
+        int diffIdx = (s_ni.diff == AI_EASY) ? 0 : (s_ni.diff == AI_MEDIUM) ? 1 : 2;
+        int arrW = NI_FH, arrH = NI_FH;
+        DrawButton(r, NI_FX,                    fy - arrH/2, arrW, arrH, 0, "<");
+        DrawButton(r, NI_FX + NI_FW - arrW,     fy - arrH/2, arrW, arrH, 0, ">");
+        RT(r, s_fontLg, diffLabels[diffIdx], NI_FX + NI_FW/2, fy, DT_WARM, true);
+    }
+    fy += NI_FH + DT_XXL;
+
+    RT(r, s_fontSm, "Tab: switch field    Enter: start", NI_FX, fy,
+       {DT_OFF.r, DT_OFF.g, DT_OFF.b, 180}, false);
+    fy += DT_XL;
+
+    DrawButton(r, NI_FX + NI_FW/2 - 120, fy - NI_FH/2, 240, NI_FH, 0, "Start");
+}
+
+AppState UIManager_HandleNameInputEvent(const SDL_Event& e, _GAMESTATE& state) {
+
+    int fy = NI_PNL_Y + 130;
+    fy += DT_L + NI_FH + DT_L + DT_L*2 + NI_FH + DT_L + DT_L*2 + NI_FH + DT_XXL + DT_XL;
+    SDL_Rect startBtn = {NI_FX + NI_FW/2 - 120, fy - NI_FH/2, 240, NI_FH};
+
+    auto commitStart = [&]() -> AppState {
+        memcpy(state.players[0].name, s_ni.p1, 29); state.players[0].name[29] = '\0';
+        memcpy(state.players[1].name, s_ni.p2, 29); state.players[1].name[29] = '\0';
+        state.mode       = s_ni.mode;
+        state.difficulty = (AIDifficulty)s_ni.diff;
+        AudioManager_PlaySFX(SFX_MENU_SELECT);
+        return STATE_PLAYING;
+    };
 
     if (e.type == SDL_KEYDOWN) {
         switch (e.key.keysym.sym) {
-        case SDLK_ESCAPE: return STATE_MENU;
-        case SDLK_UP:   if (n>0) s_loadSel=(s_loadSel+n-1)%n; break;
-        case SDLK_DOWN: if (n>0) s_loadSel=(s_loadSel+1)%n;   break;
-        case SDLK_RETURN: case SDLK_KP_ENTER:
-            if (n>0 && s_loadSel<n && LoadGame(state, s_saves[s_loadSel])) {
-                s_showResult = false; return STATE_PLAYING;
+        case SDLK_ESCAPE: AudioManager_PlaySFX(SFX_MENU_SELECT); return STATE_MENU;
+        case SDLK_RETURN: return commitStart();
+        case SDLK_TAB:
+            s_ni.field = (s_ni.field + 1) % 2;
+            AudioManager_PlaySFX(SFX_MENU_HOVER);
+            break;
+        case SDLK_LEFT:
+            if (s_ni.mode == MODE_PVE) {
+                int diffs[3] = {AI_EASY, AI_MEDIUM, AI_HARD};
+                int idx = (s_ni.diff == AI_EASY) ? 0 : (s_ni.diff == AI_MEDIUM) ? 1 : 2;
+                s_ni.diff = diffs[(idx + 2) % 3];
+                AudioManager_PlaySFX(SFX_MENU_HOVER);
             }
             break;
-        case SDLK_DELETE:
-            if (n>0 && s_loadSel<n) {
-                std::remove(s_saves[s_loadSel].c_str());
-                s_saves = GetSaveFiles();
-                if (s_loadSel >= static_cast<int>(s_saves.size()))
-                    s_loadSel = std::max(0, (int)s_saves.size()-1);
+        case SDLK_RIGHT:
+            if (s_ni.mode == MODE_PVE) {
+                int diffs[3] = {AI_EASY, AI_MEDIUM, AI_HARD};
+                int idx = (s_ni.diff == AI_EASY) ? 0 : (s_ni.diff == AI_MEDIUM) ? 1 : 2;
+                s_ni.diff = diffs[(idx + 1) % 3];
+                AudioManager_PlaySFX(SFX_MENU_HOVER);
             }
             break;
-        default: break;
+        case SDLK_BACKSPACE:
+            if (s_ni.field == 0 && strlen(s_ni.p1) > 0)
+                s_ni.p1[strlen(s_ni.p1)-1] = '\0';
+            else if (s_ni.field == 1 && s_ni.mode == MODE_PVP && strlen(s_ni.p2) > 0)
+                s_ni.p2[strlen(s_ni.p2)-1] = '\0';
+            break;
+        default:
+            if (e.key.keysym.sym >= 32 && e.key.keysym.sym < 127) {
+                char ch = (char)e.key.keysym.sym;
+                if (e.key.keysym.mod & KMOD_SHIFT) ch = (char)toupper(ch);
+                if (s_ni.field == 0 && (int)strlen(s_ni.p1) < 29) {
+                    int n = (int)strlen(s_ni.p1);
+                    s_ni.p1[n] = ch; s_ni.p1[n+1] = '\0';
+                } else if (s_ni.field == 1 && s_ni.mode == MODE_PVP && (int)strlen(s_ni.p2) < 29) {
+                    int n = (int)strlen(s_ni.p2);
+                    s_ni.p2[n] = ch; s_ni.p2[n+1] = '\0';
+                }
+            }
         }
-    } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-        // Click vào dòng save
-        const int ROW_H=52, ROW_PX=80+14, PY=115;
-        for (int i=0;i<n;i++) {
-            SDL_Rect row={ROW_PX, PY+14+i*ROW_H, 740-28, ROW_H-4};
-            if (e.button.x>=row.x && e.button.x<=row.x+row.w &&
-                e.button.y>=row.y && e.button.y<=row.y+row.h)
-                s_loadSel=i;
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        int mx = e.button.x, my = e.button.y;
+        if (mx>=startBtn.x && mx<startBtn.x+startBtn.w &&
+            my>=startBtn.y && my<startBtn.y+startBtn.h)
+            return commitStart();
+
+        int modeY = NI_PNL_Y + 130 + DT_L;
+        int modeH = NI_FH;
+        SDL_Rect pvpR = {NI_FX, modeY, NI_FW/2 - DT_S, modeH};
+        SDL_Rect pveR = {NI_FX + NI_FW/2, modeY, NI_FW/2 - DT_S, modeH};
+        if (mx>=pvpR.x && mx<pvpR.x+pvpR.w && my>=pvpR.y && my<pvpR.y+pvpR.h) {
+            if (s_ni.mode != MODE_PVP) AudioManager_PlaySFX(SFX_MENU_SELECT);
+            s_ni.mode = MODE_PVP;
         }
-        // Click nút TAI GAME
-        if (HitBtn(0) && n>0 && LoadGame(state, s_saves[s_loadSel])) {
-            s_showResult=false; return STATE_PLAYING;
+        if (mx>=pveR.x && mx<pveR.x+pveR.w && my>=pveR.y && my<pveR.y+pveR.h) {
+            if (s_ni.mode != MODE_PVE) AudioManager_PlaySFX(SFX_MENU_SELECT);
+            s_ni.mode = MODE_PVE;
         }
-        // Click nút XÓA
-        if (HitBtn(1) && n>0) {
-            std::remove(s_saves[s_loadSel].c_str());
-            s_saves=GetSaveFiles();
-            if (s_loadSel>=(int)s_saves.size()) s_loadSel=std::max(0,(int)s_saves.size()-1);
+
+        if (s_ni.mode == MODE_PVE) {
+            int diffY = NI_PNL_Y + 130 + DT_L + NI_FH + DT_L + DT_L*2 + NI_FH + DT_L + DT_L*2;
+            SDL_Rect leftArr  = {NI_FX,                 diffY - NI_FH/2, NI_FH, NI_FH};
+            SDL_Rect rightArr = {NI_FX + NI_FW - NI_FH, diffY - NI_FH/2, NI_FH, NI_FH};
+            int diffs[3] = {AI_EASY, AI_MEDIUM, AI_HARD};
+            int idx = (s_ni.diff == AI_EASY) ? 0 : (s_ni.diff == AI_MEDIUM) ? 1 : 2;
+            if (mx>=leftArr.x  && mx<leftArr.x +leftArr.w  && my>=leftArr.y  && my<leftArr.y +leftArr.h) {
+                s_ni.diff = diffs[(idx + 2) % 3];
+                AudioManager_PlaySFX(SFX_MENU_HOVER);
+            }
+            if (mx>=rightArr.x && mx<rightArr.x+rightArr.w && my>=rightArr.y && my<rightArr.y+rightArr.h) {
+                s_ni.diff = diffs[(idx + 1) % 3];
+                AudioManager_PlaySFX(SFX_MENU_HOVER);
+            }
         }
-        // Click nút QUAY LẠI
-        if (HitBtn(2)) return STATE_MENU;
+    }
+    return STATE_NAME_INPUT;
+}
+
+void UIManager_RenderHUD(SDL_Renderer* r, const _GAMESTATE& state) {
+
+    const bool p1Turn = state.turn;
+
+    static bool   s_huInit = false, s_huLastTurn = true;
+    static Uint32 s_huTurnTick = 0;
+    if (!s_huInit) { s_huLastTurn = state.turn; s_huInit = true; }
+    if (state.turn != s_huLastTurn) { s_huLastTurn = state.turn; s_huTurnTick = SDL_GetTicks(); }
+    Uint32 huSince = SDL_GetTicks() - s_huTurnTick;
+    float turnPulse = (s_huTurnTick != 0 && huSince < 450) ? (1.0f - huSince / 450.0f) : 0.0f;
+
+    const int PW = 440, PH = 380, PY = 375;
+    const int LX = 20,  RX = 1460;
+    const SDL_Color STRAW_COL = { 206,  80,  50, 255 };
+    const SDL_Color BLUE_COL  = {  78, 110, 192, 255 };
+    const SDL_Color SUB_COL   = { (Uint8)(DT_LINE.r+30),
+                                   (Uint8)(DT_LINE.g+20),
+                                   (Uint8)(DT_LINE.b+10), 190 };
+
+    const int ICON_SIZE = 72;
+    const int ICON_PAD  = 16;
+    const int ICON_Y    = PY + 44;
+
+    const int TX_OFF    = ICON_PAD + ICON_SIZE + 14;
+    const int TX_W      = PW - TX_OFF - 12;
+    char buf[64];
+
+    for (int side = 0; side < 2; side++) {
+        const int    px     = (side == 0) ? LX : RX;
+        const int    cx     = px + PW / 2;
+        const int    tcx    = px + TX_OFF + TX_W / 2;
+        const bool   isP1   = (side == 0);
+        const bool   active = isP1 ? p1Turn : !p1Turn;
+        const SDL_Color& fc = isP1 ? STRAW_COL : BLUE_COL;
+        const _PLAYER&   pl = state.players[side];
+
+        SDL_Rect panelDst = { px, PY, PW, PH };
+        SDL_Texture* boardTex = isP1 ? s_panelStakeP1 : s_panelStakeP2;
+        if (boardTex) {
+            SDL_RenderCopy(r, boardTex, nullptr, &panelDst);
+        } else {
+            DrawPanel(r, px, PY, PW, PH);
+            OutlineRect(r, px, PY, PW, PH, DT_LINE, 2);
+        }
+
+        if (active) {
+            Uint8 ba = turnPulse > 0 ? (Uint8)(80 + 140 * turnPulse) : 120;
+            if (s_panelGlow) {
+                SDL_SetTextureColorMod(s_panelGlow, fc.r, fc.g, fc.b);
+                SDL_SetTextureAlphaMod(s_panelGlow, ba);
+                SDL_RenderCopy(r, s_panelGlow, nullptr, &panelDst);
+                SDL_SetTextureColorMod(s_panelGlow, 255, 255, 255);
+                SDL_SetTextureAlphaMod(s_panelGlow, 255);
+            } else {
+                OutlineRect(r, px, PY, PW, PH, {fc.r, fc.g, fc.b, ba}, 2);
+            }
+        }
+
+        if (!boardTex) {
+            FillRect(r, px + 2, PY + 2, PW - 4, 8, {fc.r, fc.g, fc.b, 220});
+            SDL_Texture* icon = Renderer_GetPieceTexture(isP1 ? 0 : 1);
+            if (icon) {
+                SDL_Rect dst = { px + ICON_PAD, ICON_Y, ICON_SIZE, ICON_SIZE };
+                SDL_SetTextureAlphaMod(icon, active ? 255 : 160);
+                SDL_RenderCopy(r, icon, nullptr, &dst);
+                SDL_SetTextureAlphaMod(icon, 255);
+            }
+        }
+
+        const char* factionLabel = isP1 ? "STRAWBERRY" : "BLUEBERRY";
+        RTO(r, s_fontSm, factionLabel, cx, PY + 105, DT_WARM, true);
+
+        const char* pname = (!isP1 && state.mode == MODE_PVE) ? "CPU" : pl.name;
+        RTO(r, s_fontLg, pname, cx, PY + 170, active ? DT_WARM : DT_LIGHT, true);
+
+        snprintf(buf, sizeof(buf), "%d planted", pl.moves);
+        RTO(r, s_fontSm, buf, cx, PY + 237, DT_LIGHT, true);
+
+        const bool aiThink = (!isP1 && state.mode == MODE_PVE && state.aiThinking);
+        const char* statusStr;
+        SDL_Color   statusCol;
+        if (active) {
+            if (aiThink) { statusStr = "Thinking..."; statusCol = { 210, 210, 90, 255 }; }
+            else          { statusStr = "Growing...";  statusCol = DT_WARM; }
+        } else {
+            statusStr = "Resting";
+            statusCol = { DT_WARM.r, DT_WARM.g, DT_WARM.b, 190 };
+        }
+        RTO(r, s_fontSm, statusStr, cx, PY + 300, statusCol, true);
+
+    }
+
+    const int BW = 400, BH = 100, BY = 10;
+    int bw = (int)(BW * (1.0f + 0.05f * turnPulse));
+    int bh = (int)(BH * (1.0f + 0.05f * turnPulse));
+    int bx = (WINDOW_WIDTH - bw) / 2, by = BY - (bh - BH) / 2;
+    if (s_turnBanner) { SDL_Rect d = { bx, by, bw, bh }; SDL_RenderCopy(r, s_turnBanner, nullptr, &d); }
+    {
+        const char* pName = p1Turn ? state.players[0].name : state.players[1].name;
+        if (!pName || !pName[0]) pName = p1Turn ? "Grower 1" : "Grower 2";
+        snprintf(buf, sizeof(buf), "%s's turn", pName);
+    }
+    RTO(r, s_fontLg, buf, WINDOW_WIDTH / 2, BY + BH / 2 + 2, DT_WARM, true);
+
+    static Uint32 s_hintStart = 0;
+    static int    s_hintPrevMoves = -1;
+    if (state.totalMoves == 0 && s_hintPrevMoves != 0) s_hintStart = SDL_GetTicks();
+    s_hintPrevMoves = state.totalMoves;
+
+    bool hintOK = (state.totalMoves < 2) && (state.gameStatus == CHUA_KET_THUC) && !s_showPause;
+    if (hintOK && s_hintStart != 0) {
+        Uint32 since = SDL_GetTicks() - s_hintStart;
+        float a = (since < 4000) ? 1.0f : (since < 6000) ? (1.0f - (since - 4000) / 2000.0f) : 0.0f;
+        if (a > 0.02f) {
+            int cx = WINDOW_WIDTH / 2;
+            int cy = BOARD_OFFSET_Y + BOARD_PIXEL_SIZE + 30;
+            FillRect(r, cx - 330, cy - 27, 660, 54, {26, 16, 8, (Uint8)(150 * a)});
+            RTO(r, s_fontMd, "Plant five berries in a row to harvest.",
+                cx, cy - 6, {255, 248, 232, (Uint8)(238 * a)}, true);
+            RT (r, s_fontSm, "Click an empty soil patch.",
+                cx, cy + 18, {235, 224, 204, (Uint8)(205 * a)}, true);
+        }
+    }
+}
+
+static const int LD_BD_X = 484, LD_BD_Y = 232;
+static const int LD_BD_W = 932, LD_BD_H = 556;
+static const int LD_ROW_H  = 60;
+static const int LD_BTN_W = 224, LD_BTN_H = 56, LD_BTN_G = 26;
+static const SDL_Color LD_INK     = {70, 48, 28, 255};
+static const SDL_Color LD_INK_SEL = {120, 56, 16, 255};
+
+static int  LD_RowsY()  { return LD_BD_Y + 126; }
+static int  LD_BtnsY()  { return LD_BD_Y + LD_BD_H - LD_BTN_H - 56; }
+static int  LD_BtnsX0() { return LD_BD_X + LD_BD_W/2 - (LD_BTN_W*3 + LD_BTN_G*2)/2; }
+
+void UIManager_ShowLoadScreen() {
+    s_loadSel = 0;
+    s_saveSlots = GetSaveFiles();
+    s_saves     = s_saveSlots;
+}
+
+void UIManager_RenderLoadScreen(SDL_Renderer* r) {
+    if (s_loadBg) DrawCover(r, s_loadBg);
+    else { Renderer_DrawMatchBackground(r); FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0,0,0,150}); }
+
+    const int cx = LD_BD_X + LD_BD_W/2;
+
+    RT(r, s_fontXL, "Continue", cx, LD_BD_Y + 46, LD_INK, true);
+
+    if (s_saves.empty()) {
+        RT(r, s_fontMd, "No saved games yet.", cx, LD_BD_Y + LD_BD_H/2 - 10, LD_INK, true);
+        RT(r, s_fontSm, "Start a New Game to create one.", cx, LD_BD_Y + LD_BD_H/2 + 30, LD_INK, true);
+    } else {
+        const int LX = LD_BD_X + 70, LW = LD_BD_W - 140, ROW_Y0 = LD_RowsY();
+        for (int i = 0; i < (int)s_saves.size(); i++) {
+            int ry = ROW_Y0 + i * LD_ROW_H;
+            bool sel = (i == s_loadSel);
+            if (sel) {
+                FillRect(r, LX, ry, LW, LD_ROW_H-6, {150, 110, 60, 70});
+                OutlineRect(r, LX, ry, LW, LD_ROW_H-6, {120, 80, 40, 220}, 2);
+            }
+            RT(r, s_fontMd, s_saves[i].c_str(), LX+24, ry+(LD_ROW_H-6)/2, sel ? LD_INK_SEL : LD_INK, false);
+        }
+    }
+
+    int bbX = LD_BtnsX0(), bbY = LD_BtnsY();
+    DrawButton(r, bbX,                            bbY, LD_BTN_W, LD_BTN_H, 0, "Load");
+    DrawButton(r, bbX + (LD_BTN_W+LD_BTN_G),      bbY, LD_BTN_W, LD_BTN_H, 0, "Delete");
+    DrawButton(r, bbX + 2*(LD_BTN_W+LD_BTN_G),    bbY, LD_BTN_W, LD_BTN_H, 0, "Back");
+}
+
+AppState UIManager_HandleLoadEvent(const SDL_Event& e, _GAMESTATE& state) {
+    const int BBW = LD_BTN_W, BBH = LD_BTN_H, BBG = LD_BTN_G;
+    int bbY = LD_BtnsY();
+    int bbX = LD_BtnsX0();
+
+    if (e.type == SDL_KEYDOWN) {
+        if (e.key.keysym.sym == SDLK_ESCAPE) { AudioManager_PlaySFX(SFX_MENU_SELECT); return STATE_MENU; }
+        if (e.key.keysym.sym == SDLK_UP && s_loadSel > 0) { s_loadSel--; AudioManager_PlaySFX(SFX_MENU_HOVER); }
+        if (e.key.keysym.sym == SDLK_DOWN && s_loadSel < (int)s_saves.size()-1) { s_loadSel++; AudioManager_PlaySFX(SFX_MENU_HOVER); }
+        if (e.key.keysym.sym == SDLK_RETURN && !s_saves.empty()) {
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+            if (LoadGame(state, s_saveSlots[s_loadSel])) return STATE_PLAYING;
+        }
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        int mx = e.button.x, my = e.button.y;
+
+        const int LX = LD_BD_X + 70, LW = LD_BD_W - 140, ROW_Y0 = LD_RowsY();
+        for (int i = 0; i < (int)s_saves.size(); i++) {
+            SDL_Rect row = {LX, ROW_Y0 + i*LD_ROW_H, LW, LD_ROW_H-6};
+            if (mx>=row.x && mx<row.x+row.w && my>=row.y && my<row.y+row.h) {
+                if (s_loadSel != i) AudioManager_PlaySFX(SFX_MENU_HOVER);
+                s_loadSel = i;
+            }
+        }
+        SDL_Rect loadR   = {bbX,               bbY, BBW, BBH};
+        SDL_Rect delR    = {bbX+(BBW+BBG),     bbY, BBW, BBH};
+        SDL_Rect backR   = {bbX+2*(BBW+BBG),   bbY, BBW, BBH};
+        if (mx>=loadR.x && mx<loadR.x+loadR.w && my>=loadR.y && my<loadR.y+loadR.h && !s_saves.empty()) {
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+            if (LoadGame(state, s_saveSlots[s_loadSel])) return STATE_PLAYING;
+        }
+        if (mx>=delR.x && mx<delR.x+delR.w && my>=delR.y && my<delR.y+delR.h && !s_saves.empty()) {
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+            DeleteSave(s_saveSlots[s_loadSel]);
+            UIManager_ShowLoadScreen();
+        }
+        if (mx>=backR.x && mx<backR.x+backR.w && my>=backR.y && my<backR.y+backR.h) {
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+            return STATE_MENU;
+        }
     }
     return STATE_LOAD_GAME;
 }
 
-// ── Save dialog (inner event loop) ───────────────────────────────
-void UIManager_ShowSaveDialog(_GAMESTATE& state) {
-    char name[30] = {};
-    bool done = false;
-    SDL_StartTextInput();
+static bool s_showSaveNameDlg = false;
+static char s_saveNameBuf[21] = "";
 
-    while (!done) {
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT) { done = true; break; }
-            if (e.type == SDL_KEYDOWN) {
-                switch (e.key.keysym.sym) {
-                case SDLK_ESCAPE: done = true; break;
-                case SDLK_RETURN: case SDLK_KP_ENTER:
-                    if (name[0]) SaveGame(state, name);
-                    done = true;
-                    break;
-                case SDLK_BACKSPACE:
-                    if (name[0]) name[strlen(name)-1] = '\0';
-                    break;
-                default: break;
-                }
-            } else if (e.type == SDL_TEXTINPUT && strlen(name) < 28) {
-                strncat_s(name, sizeof(name), e.text.text, _TRUNCATE);
-            }
-        }
-
-        // Overlay
-        SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(s_renderer, 0, 0, 0, 175);
-        SDL_Rect ov = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
-        SDL_RenderFillRect(s_renderer, &ov);
-        SDL_SetRenderDrawBlendMode(s_renderer, SDL_BLENDMODE_NONE);
-
-        SDL_Rect box = { WINDOW_WIDTH/2-230, WINDOW_HEIGHT/2-105, 460, 210 };
-        SDL_SetRenderDrawColor(s_renderer, 14, 14, 38, 255);
-        SDL_RenderFillRect(s_renderer, &box);
-        SDL_SetRenderDrawColor(s_renderer, 118, 92, 28, 255);
-        SDL_RenderDrawRect(s_renderer, &box);
-        // Viền trong mỏng hơn
-        SDL_Rect inner = {box.x+3, box.y+3, box.w-6, box.h-6};
-        SDL_SetRenderDrawColor(s_renderer, 58, 45, 14, 255);
-        SDL_RenderDrawRect(s_renderer, &inner);
-
-        RT(s_renderer, s_fontMd, "LUU GAME",
-           WINDOW_WIDTH/2, box.y+18, {218,192,78,255}, true);
-
-        // Đường kẻ dưới tiêu đề
-        SDL_SetRenderDrawColor(s_renderer, 75, 58, 18, 255);
-        SDL_RenderDrawLine(s_renderer, box.x+14, box.y+52, box.x+box.w-14, box.y+52);
-
-        RT(s_renderer, s_fontSm, "Nhap ten file luu:",
-           box.x+20, box.y+62, {148,148,148,255});
-
-        SDL_Rect inp = {box.x+18, box.y+84, box.w-36, 40};
-        SDL_SetRenderDrawColor(s_renderer, 38, 38, 88, 255);
-        SDL_RenderFillRect(s_renderer, &inp);
-        SDL_SetRenderDrawColor(s_renderer, 118, 118, 218, 255);
-        SDL_RenderDrawRect(s_renderer, &inp);
-
-        char disp[32]; snprintf(disp, sizeof(disp), "%s_", name);
-        RT(s_renderer, s_fontMd, disp, inp.x+10, inp.y+7, {255,228,62,255});
-
-        RT(s_renderer, s_fontSm, "Enter: luu   ESC: huy",
-           WINDOW_WIDTH/2, box.y+148, {88,88,88,255}, true);
-
-        SDL_RenderPresent(s_renderer);
-        SDL_Delay(16);
+static bool SaveNameIsValid(const char* s) {
+    int n = (int)strlen(s);
+    if (n == 0) return false;
+    for (int i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 32 || c > 126) return false;
+        if (c=='/' || c=='\\' || c==':' || c=='*' ||
+            c=='?' || c=='"'  || c=='<' || c=='>'  || c=='|') return false;
     }
-    SDL_StopTextInput();
+    return true;
 }
 
-// ── Result ───────────────────────────────────────────────────────
+void UIManager_ShowSaveNameDialog() {
+    s_showSaveNameDlg = true;
+    int n = (int)GetSaveFiles().size() + 1;
+    snprintf(s_saveNameBuf, sizeof(s_saveNameBuf), "save_%d", n);
+}
+
+void UIManager_HideSaveNameDialog() { s_showSaveNameDlg = false; }
+bool UIManager_IsSaveNameDialogOpen() { return s_showSaveNameDlg; }
+
+void UIManager_RenderSaveNameDialog(SDL_Renderer* r) {
+    if (!s_showSaveNameDlg) return;
+
+    FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0, 0, 0, 160});
+
+    const int PW = 360, PH = 300;
+    const int PX = WINDOW_WIDTH / 2 - PW / 2;
+    const int PY = WINDOW_HEIGHT / 2 - PH / 2;
+
+    DrawPanel(r, PX, PY, PW, PH);
+    OutlineRect(r, PX, PY, PW, PH, DT_LINE, 2);
+
+    RT(r, s_fontMd, "Save Game", WINDOW_WIDTH / 2, PY + 42, DT_WARM, true);
+
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, DT_LINE.r, DT_LINE.g, DT_LINE.b, 80);
+    SDL_RenderDrawLine(r, PX + 20, PY + 66, PX + PW - 20, PY + 66);
+
+    RT(r, s_fontSm, "Enter save name:", PX + 24, PY + 86, DT_LIGHT, false);
+
+    const int IX = PX + 20, IY = PY + 106, IW = PW - 40, IH = 42;
+    FillRect(r, IX, IY, IW, IH, {50, 30, 12, 220});
+    OutlineRect(r, IX, IY, IW, IH, DT_WARM, 1);
+
+    char dispBuf[26];
+    bool cursorOn = (SDL_GetTicks() % 800) < 400;
+    snprintf(dispBuf, sizeof(dispBuf), cursorOn ? "%s|" : "%s", s_saveNameBuf);
+    RT(r, s_fontSm, dispBuf, IX + 10, IY + IH / 2, DT_WARM, false);
+
+    char cntBuf[10];
+    snprintf(cntBuf, sizeof(cntBuf), "%d/20", (int)strlen(s_saveNameBuf));
+    RT(r, s_fontSm, cntBuf, PX + PW - 50, PY + 155, DT_LINE, true);
+
+    const int BTW = 118, BTH = 44, BTY = PY + 216;
+    DrawButton(r, PX + 50,  BTY, BTW, BTH, 0, "Save");
+    DrawButton(r, PX + 192, BTY, BTW, BTH, 0, "Cancel");
+}
+
+int UIManager_HandleSaveNameDialogEvent(const SDL_Event& e, _GAMESTATE& state) {
+    if (!s_showSaveNameDlg) return 0;
+
+    const int PW = 360, PH = 300;
+    const int PX = WINDOW_WIDTH / 2 - PW / 2;
+    const int PY = WINDOW_HEIGHT / 2 - PH / 2;
+    const int BTW = 118, BTH = 44, BTY = PY + 216;
+    SDL_Rect saveR   = { PX + 50,  BTY, BTW, BTH };
+    SDL_Rect cancelR = { PX + 192, BTY, BTW, BTH };
+
+    auto doSave = [&]() -> int {
+        if (!SaveNameIsValid(s_saveNameBuf)) return 0;
+        SaveGame(state, s_saveNameBuf);
+        UIManager_HideSaveNameDialog();
+        s_saveMsgUntil = SDL_GetTicks() + 2200;
+        AudioManager_PlaySFX(SFX_MENU_SELECT);
+        return 1;
+    };
+
+    if (e.type == SDL_KEYDOWN) {
+        switch (e.key.keysym.sym) {
+        case SDLK_ESCAPE:
+            UIManager_HideSaveNameDialog();
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+            return -1;
+        case SDLK_RETURN: return doSave();
+        case SDLK_BACKSPACE: {
+            int n = (int)strlen(s_saveNameBuf);
+            if (n > 0) s_saveNameBuf[n - 1] = '\0';
+            break;
+        }
+        default: {
+            int sym = e.key.keysym.sym;
+            if (sym >= 32 && sym < 127) {
+                char c = (char)sym;
+                if (e.key.keysym.mod & KMOD_SHIFT) c = (char)toupper(c);
+                if (c!='/' && c!='\\' && c!=':' && c!='*' &&
+                    c!='?' && c!='"'  && c!='<' && c!='>'  && c!='|') {
+                    int n = (int)strlen(s_saveNameBuf);
+                    if (n < 20) { s_saveNameBuf[n] = c; s_saveNameBuf[n+1] = '\0'; }
+                }
+            }
+            break;
+        }
+        }
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        int mx = e.button.x, my = e.button.y;
+        if (mx>=saveR.x   && mx<saveR.x+saveR.w   && my>=saveR.y   && my<saveR.y+saveR.h)
+            return doSave();
+        if (mx>=cancelR.x && mx<cancelR.x+cancelR.w && my>=cancelR.y && my<cancelR.y+cancelR.h) {
+            UIManager_HideSaveNameDialog();
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 void UIManager_ShowResult(const _GAMESTATE& state, int result) {
     s_showResult = true;
-    if (result == P1_THANG)
-        snprintf(s_resultMsg, sizeof(s_resultMsg), "%s wins!", state.players[0].name);
-    else if (result == P2_THANG)
-        snprintf(s_resultMsg, sizeof(s_resultMsg), "%s wins!", state.players[1].name);
-    else
-        snprintf(s_resultMsg, sizeof(s_resultMsg), "Draw!");
+    if      (result == P1_THANG) snprintf(s_resultMsg, sizeof(s_resultMsg), "%s wins!", state.players[0].name);
+    else if (result == P2_THANG) snprintf(s_resultMsg, sizeof(s_resultMsg), "%s wins!", state.players[1].name);
+    else                         snprintf(s_resultMsg, sizeof(s_resultMsg), "Draw!");
+}
+
+void UIManager_RenderResult(SDL_Renderer* r) {
+    if (!s_showResult) return;
+    FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0,0,0,160});
+
+    const int MW = 560, MH = 280, MX = WINDOW_WIDTH/2-MW/2, MY = WINDOW_HEIGHT/2-MH/2;
+    DrawPanel(r, MX, MY, MW, MH);
+    RT(r, s_fontLg, s_resultMsg, WINDOW_WIDTH/2, MY + 80, DT_WARM, true);
+
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(r, DT_LINE.r, DT_LINE.g, DT_LINE.b, 100);
+    SDL_RenderDrawLine(r, MX+DT_XXL, MY+120, MX+MW-DT_XXL, MY+120);
+
+    DrawButton(r, MX+MW/2-100, MY+MH-90, 200, 58, 0, "OK");
 }
 
 void UIManager_HideResult() {
     s_showResult = false;
-    s_resultMsg[0] = '\0';
 }
-
-void UIManager_RenderResult(SDL_Renderer* /*r*/) {
-    // Kết quả được render inline trong RenderPanel (bên trong UIManager_RenderHUD)
-}
-
-// ================================================================
-//  SPLASH SCREEN
-//  Màn hình chờ hiển thị khi game khởi động.
-//  Kỹ thuật: alpha fade — nhân màu với hệ số alpha tăng/giảm theo thời gian.
-//  Phase 1 (0–0.6s):  fade in  (alpha 0→255)
-//  Phase 2 (0.6–2.0s): hold    (alpha 255)
-//  Phase 3 (2.0–2.6s): fade out (alpha 255→0)
-//  Sau 2.6s: tự động chuyển STATE_MENU
-// ================================================================
-static float s_splashTimer = 0.0f;
-static const float SPLASH_FADEIN  = 0.6f;
-static const float SPLASH_HOLD    = 2.0f;
-static const float SPLASH_FADEOUT = 2.6f;
 
 void UIManager_ShowSplash() {
-    s_splashTimer = 0.0f;
+    s_splashTimer = 2.5f;
+}
+
+static bool s_qaSplashFreeze = false;
+void UIManager_QA_FreezeSplash() { s_splashTimer = 1.2f; s_qaSplashFreeze = true; }
+void UIManager_QA_OpenCredits() { s_showCredits = true; }
+void UIManager_QA_OpenHowTo()   { s_showHowTo = true; }
+void UIManager_QA_FakeSaves(int n) {
+    s_saves.clear(); s_saveSlots.clear();
+    for (int i = 0; i < n; i++) { char b[32]; snprintf(b, sizeof(b), "qa_save_%d", i+1); s_saves.push_back(b); s_saveSlots.push_back(b); }
 }
 
 AppState UIManager_UpdateSplash(float dt) {
-    s_splashTimer += dt;
-    if (s_splashTimer >= SPLASH_FADEOUT) return STATE_MENU;
+    if (s_qaSplashFreeze) return STATE_SPLASH;
+    s_splashTimer -= dt;
+    if (s_splashTimer <= 0.0f) return STATE_MENU;
     return STATE_SPLASH;
 }
 
 void UIManager_RenderSplash(SDL_Renderer* r) {
-    SDL_SetRenderDrawColor(r, 5, 5, 18, 255);
-    SDL_RenderClear(r);
+    float alpha = 1.0f;
+    if (s_splashTimer > 2.0f)      alpha = 1.0f - (s_splashTimer - 2.0f) / 0.5f;
+    else if (s_splashTimer < 0.5f) alpha = s_splashTimer / 0.5f;
 
-    // Tính alpha theo phase
-    Uint8 alpha;
-    if (s_splashTimer < SPLASH_FADEIN) {
-        alpha = static_cast<Uint8>(255.0f * s_splashTimer / SPLASH_FADEIN);
-    } else if (s_splashTimer < SPLASH_HOLD) {
-        alpha = 255;
-    } else {
-        float prog = (s_splashTimer - SPLASH_HOLD) / (SPLASH_FADEOUT - SPLASH_HOLD);
-        alpha = static_cast<Uint8>(255.0f * (1.0f - prog));
+    if (s_splashBg) {
+        FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0, 0, 0, 255});
+        SDL_SetTextureAlphaMod(s_splashBg, (Uint8)(alpha * 255));
+        DrawCover(r, s_splashBg);
+        SDL_SetTextureAlphaMod(s_splashBg, 255);
+        SDL_Color hint = {255, 250, 235, (Uint8)(alpha * 200)};
+        RTO(r, s_fontSm, "Press any key", WINDOW_WIDTH/2, WINDOW_HEIGHT - 60, hint, true);
+        return;
     }
 
-    // Tiêu đề chính
-    SDL_Color titleC = { 218, 192, 78, alpha };
-    RT(r, s_fontLg, "CO CARO", WINDOW_WIDTH/2, WINDOW_HEIGHT/2 - 55, titleC, true);
-
-    // Subtitle
-    SDL_Color subC = { 155, 155, 155, alpha };
-    RT(r, s_fontMd, "GOMOKU", WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 5, subC, true);
-
-    // Dòng gợi ý nhỏ
-    if (s_splashTimer > SPLASH_FADEIN) {
-        SDL_Color hintC = { 70, 70, 70, alpha };
-        RT(r, s_fontSm, "Nhan phim bat ky de bo qua...", WINDOW_WIDTH/2, WINDOW_HEIGHT - 55, hintC, true);
-    }
+    FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {DT_DEEP.r, DT_DEEP.g, DT_DEEP.b, 255});
+    SDL_Color c = {DT_WARM.r, DT_WARM.g, DT_WARM.b, (Uint8)(alpha * 255)};
+    RT(r, s_fontXL, "Berry Grove", WINDOW_WIDTH/2, WINDOW_HEIGHT/2 - 30, c, true);
+    SDL_Color c2 = {DT_LIGHT.r, DT_LIGHT.g, DT_LIGHT.b, (Uint8)(alpha * 180)};
+    RT(r, s_fontSm, "A Strawtegy Game", WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 30, c2, true);
 }
 
-// ================================================================
-//  HEADER BAR
-//  Vẽ trong khoảng trống 60px phía trên bàn cờ (y=0 đến y=58).
-//  Hiển thị: chế độ chơi + số ván | lượt hiện tại | hint ESC
-// ================================================================
-void UIManager_RenderGameHeader(SDL_Renderer* r, const _GAMESTATE& state) {
-    // Header bar — cozy parchment bán trong suốt
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, COZY_PARCHMENT.r, COZY_PARCHMENT.g, COZY_PARCHMENT.b, 200);
-    SDL_Rect bar = { 0, 0, WINDOW_WIDTH, BOARD_OFFSET_Y - 2 };
-    SDL_RenderFillRect(r, &bar);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-
-    SDL_SetRenderDrawColor(r, COZY_WOOD_DARK.r, COZY_WOOD_DARK.g, COZY_WOOD_DARK.b, 255);
-    SDL_RenderDrawLine(r, 0, BOARD_OFFSET_Y - 2, WINDOW_WIDTH, BOARD_OFFSET_Y - 2);
-
-    // Tên chế độ + số ván (wins+losses+draws+1 = ván hiện tại)
-    int session = state.players[0].wins + state.players[0].losses + state.players[0].draws + 1;
-    char header[64];
-    const char* modeName = (state.mode == MODE_PVE) ? "AI BATTLE" : "VS PLAYER";
-    snprintf(header, sizeof(header), "%s  -  VAN %d", modeName, session);
-    RT(r, s_fontMd, header, WINDOW_WIDTH / 2, 7, COZY_WOOD_DARK, true);
-
-    char turnBuf[32];
-    snprintf(turnBuf, sizeof(turnBuf), "Luot: %d", state.totalMoves + 1);
-    RT(r, s_fontSm, turnBuf, WINDOW_WIDTH / 2, 34, COZY_WOOD_MID, true);
-
-    DrawIcon(r, ICON_PAUSE, WINDOW_WIDTH - 30, BOARD_OFFSET_Y/2, 26);
-    RT(r, s_fontSm, "[ESC]", WINDOW_WIDTH - 65, 22, COZY_WOOD_MID);
-}
-
-// ================================================================
-//  PAUSE OVERLAY
-//  Khi người chơi nhấn ESC trong lúc chơi, một lớp overlay tối
-//  phủ lên toàn màn hình, và một panel dọc nhỏ xuất hiện ở giữa.
-//  Painter's Algorithm: overlay là layer trên cùng — vẽ sau cùng
-//  trong App_Render để che tất cả các layer phía dưới.
-// ================================================================
-static bool s_showPause = false;
-static int  s_pauseSel  = 0;
-
-static const char* PAUSE_ITEMS[] = { "Tiep tuc", "Choi lai", "Luu game", "Thoat" };
+static const char* PAUSE_ITEMS[] = { "Resume", "Restart", "Save Game", "Quit to Menu" };
 static const int   PAUSE_COUNT   = 4;
+static int         s_pauseBtnState[4] = {};
 
-void UIManager_ShowPause() { s_showPause = true;  s_pauseSel = 0; }
-void UIManager_HidePause() { s_showPause = false; }
+void UIManager_ShowPause() {
+    s_showPause = true;
+    memset(s_pauseBtnState, 0, sizeof(s_pauseBtnState));
+}
+void UIManager_HidePause()    { s_showPause = false; }
 bool UIManager_IsPauseShown() { return s_showPause; }
 
 PauseAction UIManager_HandlePauseEvent(const SDL_Event& e, _GAMESTATE& state) {
     if (!s_showPause) return PAUSE_NONE;
+    const int MW = 440, BTW = 360, BTH = 60, BTG = 10;
+    const int MH = 80 + PAUSE_COUNT*(BTH+BTG) + DT_L;
+    const int MX = WINDOW_WIDTH/2 - MW/2;
+    const int MY = WINDOW_HEIGHT/2 - MH/2;
+    const int bx = WINDOW_WIDTH/2 - BTW/2;
 
-    if (e.type == SDL_KEYDOWN) {
-        switch (e.key.keysym.sym) {
-        case SDLK_UP:
-            s_pauseSel = (s_pauseSel + PAUSE_COUNT - 1) % PAUSE_COUNT;
-            return PAUSE_NONE;
-        case SDLK_DOWN:
-            s_pauseSel = (s_pauseSel + 1) % PAUSE_COUNT;
-            return PAUSE_NONE;
-        case SDLK_RETURN: case SDLK_KP_ENTER:
-            goto CONFIRM_PAUSE;
-        default: break;
-        }
-    } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-        const int PW = 240;
-        const int PH = PAUSE_COUNT * 58 + 58;
-        const int PX = WINDOW_WIDTH / 2 - PW / 2;
-        const int PY = WINDOW_HEIGHT / 2 - PH / 2;
+    if (e.type == SDL_MOUSEMOTION) {
         for (int i = 0; i < PAUSE_COUNT; i++) {
-            SDL_Rect btn = { PX + 14, PY + 50 + i * 56, PW - 28, 46 };
-            if (e.button.x >= btn.x && e.button.x <= btn.x + btn.w &&
-                e.button.y >= btn.y && e.button.y <= btn.y + btn.h) {
-                s_pauseSel = i;
-                goto CONFIRM_PAUSE;
+            int by = MY + 76 + i*(BTH+BTG);
+            SDL_Rect b = {bx, by, BTW, BTH};
+            bool hit = (e.motion.x>=b.x && e.motion.x<b.x+b.w &&
+                        e.motion.y>=b.y && e.motion.y<b.y+b.h);
+            if (hit && s_pauseBtnState[i] == 0) AudioManager_PlaySFX(SFX_MENU_HOVER);
+            s_pauseBtnState[i] = hit ? 1 : 0;
+        }
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        for (int i = 0; i < PAUSE_COUNT; i++) {
+            int by = MY + 76 + i*(BTH+BTG);
+            SDL_Rect b = {bx, by, BTW, BTH};
+            if (e.button.x>=b.x && e.button.x<b.x+b.w &&
+                e.button.y>=b.y && e.button.y<b.y+b.h) {
+                static const PauseAction ACTS[4] = {PAUSE_RESUME, PAUSE_RESTART, PAUSE_SAVE, PAUSE_QUIT};
+                AudioManager_PlaySFX(SFX_MENU_SELECT);
+                return ACTS[i];
             }
         }
     }
-    return PAUSE_NONE;
-
-CONFIRM_PAUSE:
-    switch (s_pauseSel) {
-    case 0: return PAUSE_RESUME;
-    case 1: return PAUSE_RESTART;
-    case 2: UIManager_ShowSaveDialog(state); return PAUSE_NONE;
-    case 3: return PAUSE_QUIT;
+    if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) {
+        AudioManager_PlaySFX(SFX_MENU_SELECT);
+        return PAUSE_RESUME;
     }
     return PAUSE_NONE;
 }
 
 void UIManager_RenderPauseOverlay(SDL_Renderer* r) {
     if (!s_showPause) return;
+    const int MW = 440, BTW = 360, BTH = 60, BTG = 10;
+    const int MH = 80 + PAUSE_COUNT*(BTH+BTG) + DT_L;
+    const int MX = WINDOW_WIDTH/2 - MW/2;
+    const int MY = WINDOW_HEIGHT/2 - MH/2;
 
-    // Lớp tối phủ toàn màn hình — Alpha Blending tạo hiệu ứng "đóng băng" game
+    FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0,0,0,140});
+    DrawPanel(r, MX, MY, MW, MH);
+    RT(r, s_fontLg, "Paused", WINDOW_WIDTH/2, MY + 44, DT_LIGHT, true);
+
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 0, 0, 0, 168);
-    SDL_Rect ov = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
-    SDL_RenderFillRect(r, &ov);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawColor(r, DT_LINE.r, DT_LINE.g, DT_LINE.b, 80);
+    SDL_RenderDrawLine(r, MX+DT_XXL, MY+68, MX+MW-DT_XXL, MY+68);
 
-    // Panel trung tâm
-    const int PW = 240;
-    const int PH = PAUSE_COUNT * 58 + 58;
-    const int PX = WINDOW_WIDTH / 2 - PW / 2;
-    const int PY = WINDOW_HEIGHT / 2 - PH / 2;
-
-    DrawCozyPanel(r, PX, PY, PW, PH, false);
-    RT(r, s_fontMd, "DUNG GAME", WINDOW_WIDTH / 2, PY + 11, COZY_WOOD_DARK, true);
-    SDL_SetRenderDrawColor(r, COZY_WOOD_MID.r, COZY_WOOD_MID.g, COZY_WOOD_MID.b, 255);
-    SDL_RenderDrawLine(r, PX + 12, PY + 42, PX + PW - 12, PY + 42);
-
+    int bx = WINDOW_WIDTH/2 - BTW/2;
     for (int i = 0; i < PAUSE_COUNT; i++) {
-        bool sel = (i == s_pauseSel);
-        int BY = PY + 50 + i * 56;
-        DrawCozyPanel(r, PX + 14, BY, PW - 28, 46, sel);
-        SDL_Color tc = sel ? COZY_GOLD : COZY_TEXT_DARK;
-        RT(r, s_fontMd, PAUSE_ITEMS[i], WINDOW_WIDTH / 2, BY + 11, tc, true);
+        DrawButton(r, bx, MY + 76 + i*(BTH+BTG), BTW, BTH,
+                   s_pauseBtnState[i], PAUSE_ITEMS[i]);
     }
+
+    if (SDL_GetTicks() < s_saveMsgUntil)
+        RT(r, s_fontSm, "Game saved!", WINDOW_WIDTH/2, MY + MH - 22, DT_WARM, true);
 }
 
-// ================================================================
-//  SETTINGS SCREEN
-//  Màn hình cài đặt với 4 tab: Âm thanh | Phím chơi | Luật chơi | Thông tin
-//  Dùng kỹ thuật "tab state": biến s_settingsTab quyết định nội dung
-//  nào được vẽ trong panel — giống như switch/case trong render loop.
-// ================================================================
-static int s_settingsTab = 0;
-static const char* SETTINGS_TABS[] = { "AM THANH", "PHIM CHOI", "LUAT CHOI", "THONG TIN" };
-static const int   SETTINGS_TAB_COUNT = 4;
+static const char* SETTINGS_TABS[] = { "Sound", "Display" };
+static const int   SETTINGS_TAB_COUNT = 2;
+static int s_settingsBtnState[2] = {};
+
+static const int ST_PW = 760, ST_PH = 470;
+static const int ST_PX = WINDOW_WIDTH/2 - ST_PW/2;
+static const int ST_PY = (WINDOW_HEIGHT - ST_PH)/2;
+static const int ST_TW = 210, ST_TH = 52, ST_TG = 16;
+static int ST_TabsX() { return ST_PX + ST_PW/2 - (ST_TW*SETTINGS_TAB_COUNT + ST_TG*(SETTINGS_TAB_COUNT-1))/2; }
+static int ST_TabY()  { return ST_PY + 104; }
+static SDL_Rect ST_CloseR() { SDL_Rect c = { ST_PX + ST_PW - 60, ST_PY + 16, 44, 44 }; return c; }
+static int s_musicVol = 100, s_sfxVol = 100;
+static const int ST_VBW = 52, ST_VBH = 44;
+static int ST_VolRowY(int k) { return ST_TabY() + ST_TH + 64 + k*92; }
+static int ST_VolBlockX()    { return ST_PX + ST_PW - 80 - (ST_VBW + 90 + ST_VBW); }
+static SDL_Rect ST_VolMinus(int k){ SDL_Rect q={ST_VolBlockX(),              ST_VolRowY(k)-ST_VBH/2, ST_VBW, ST_VBH}; return q; }
+static SDL_Rect ST_VolPlus(int k) { SDL_Rect q={ST_VolBlockX()+ST_VBW+90,    ST_VolRowY(k)-ST_VBH/2, ST_VBW, ST_VBH}; return q; }
+static SDL_Rect ST_ToggleR() { SDL_Rect q={ST_VolBlockX(), ST_VolRowY(0)-ST_VBH/2, ST_VBW*2+90, ST_VBH}; return q; }
 
 void UIManager_ShowSettings() {
     s_settingsTab = 0;
+    memset(s_settingsBtnState, 0, sizeof(s_settingsBtnState));
 }
 
 AppState UIManager_HandleSettingsEvent(const SDL_Event& e) {
-    if (e.type == SDL_KEYDOWN) {
-        if (e.key.keysym.sym == SDLK_ESCAPE)  return STATE_MENU;
-        if (e.key.keysym.sym == SDLK_LEFT)
-            s_settingsTab = (s_settingsTab + SETTINGS_TAB_COUNT - 1) % SETTINGS_TAB_COUNT;
-        if (e.key.keysym.sym == SDLK_RIGHT)
-            s_settingsTab = (s_settingsTab + 1) % SETTINGS_TAB_COUNT;
-    } else if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
-        // Click tab
-        const int TW = 170;
-        const int TX0 = WINDOW_WIDTH / 2 - (SETTINGS_TAB_COUNT * TW) / 2;
-        for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
-            SDL_Rect tab = { TX0 + i * TW, 60, TW - 4, 40 };
-            if (e.button.x >= tab.x && e.button.x <= tab.x + tab.w &&
-                e.button.y >= tab.y && e.button.y <= tab.y + tab.h)
-                s_settingsTab = i;
-        }
-        // Click nút X (đóng)
-        SDL_Rect xBtn = { WINDOW_WIDTH - 52, 14, 34, 34 };
-        if (e.button.x >= xBtn.x && e.button.x <= xBtn.x + xBtn.w &&
-            e.button.y >= xBtn.y && e.button.y <= xBtn.y + xBtn.h)
+    SDL_Rect closeR = ST_CloseR();
+    if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT) {
+        int mx = e.button.x, my = e.button.y;
+        if (mx>=closeR.x && mx<closeR.x+closeR.w && my>=closeR.y && my<closeR.y+closeR.h) {
+            AudioManager_PlaySFX(SFX_MENU_SELECT);
             return STATE_MENU;
+        }
+        for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
+            SDL_Rect tabR = {ST_TabsX() + i*(ST_TW+ST_TG), ST_TabY(), ST_TW, ST_TH};
+            if (mx>=tabR.x && mx<tabR.x+tabR.w && my>=tabR.y && my<tabR.y+tabR.h) {
+                if (s_settingsTab != i) AudioManager_PlaySFX(SFX_MENU_SELECT);
+                s_settingsTab = i;
+            }
+        }
+        auto inRect = [&](SDL_Rect q){ return mx>=q.x && mx<q.x+q.w && my>=q.y && my<q.y+q.h; };
+        if (s_settingsTab == 0) {
+            int* vols[2] = { &s_musicVol, &s_sfxVol };
+            for (int k = 0; k < 2; k++) {
+                bool changed = false;
+                if (inRect(ST_VolMinus(k))) { *vols[k] = (*vols[k] > 0)   ? *vols[k]-10 : 0;   changed = true; }
+                if (inRect(ST_VolPlus(k)))  { *vols[k] = (*vols[k] < 100) ? *vols[k]+10 : 100; changed = true; }
+                if (changed) {
+                    int mix = (*vols[k]) * 128 / 100;
+                    if (k == 0) AudioManager_SetMusicVolume(mix);
+                    else        AudioManager_SetSFXVolume(mix);
+                    AudioManager_PlaySFX(SFX_MENU_HOVER);
+                }
+            }
+        }
+        else if (s_settingsTab == 1) {
+            if (inRect(ST_ToggleR())) {
+                Particle_SetEnabled(!Particle_IsEnabled());
+                AudioManager_PlaySFX(SFX_MENU_HOVER);
+            }
+        }
+    }
+    if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) {
+        AudioManager_PlaySFX(SFX_MENU_SELECT);
+        return STATE_MENU;
     }
     return STATE_SETTINGS;
 }
 
 void UIManager_RenderSettings(SDL_Renderer* r) {
-    RT(r, s_fontLg, "CAI DAT", WINDOW_WIDTH / 2, 12, COZY_WOOD_DARK, true);
+    if (s_settingsBg) DrawCover(r, s_settingsBg);
+    else Renderer_DrawMatchBackground(r);
+    FillRect(r, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT, {0,0,0,140});
 
-    // Nút X dùng icon sprite
-    {
-        SDL_Rect xBtn = { WINDOW_WIDTH - 52, 14, 34, 34 };
-        DrawCozyPanel(r, xBtn.x, xBtn.y, xBtn.w, xBtn.h, false);
-        DrawIcon(r, ICON_X, xBtn.x + 17, xBtn.y + 17, 28);
-    }
+    DrawPanel(r, ST_PX, ST_PY, ST_PW, ST_PH);
+    RT(r, s_fontLg, "Settings", ST_PX + ST_PW/2, ST_PY + 42, DT_LIGHT, true);
 
-    // Tab bar
-    const int TW = 170;
-    const int TX0 = WINDOW_WIDTH / 2 - (SETTINGS_TAB_COUNT * TW) / 2;
-    for (int i = 0; i < SETTINGS_TAB_COUNT; i++) {
-        bool sel = (i == s_settingsTab);
-        DrawCozyPanel(r, TX0 + i * TW, 60, TW - 4, 40, sel);
-        SDL_Color tc = sel ? COZY_GOLD : COZY_TEXT_DARK;
-        RT(r, s_fontSm, SETTINGS_TABS[i], TX0 + i * TW + TW / 2 - 2, 72, tc, true);
-    }
+    SDL_Rect cr = ST_CloseR();
+    DrawButton(r, cr.x, cr.y, cr.w, cr.h, 0, "X");
 
-    // Panel nội dung
-    const int CX = WINDOW_WIDTH / 2;
-    const int CW = 720, CH = 545, CY = 112;
-    DrawCozyPanel(r, CX - CW/2, CY, CW, CH, false);
+    for (int i = 0; i < SETTINGS_TAB_COUNT; i++)
+        DrawButton(r, ST_TabsX() + i*(ST_TW+ST_TG), ST_TabY(), ST_TW, ST_TH,
+                   s_settingsTab == i ? 1 : 0, SETTINGS_TABS[i]);
 
-    const int IX = CX - CW / 2 + 32;
-    int iy = CY + 28;
-
-    switch (s_settingsTab) {
-
-    // ── Âm thanh ────────────────────────────────────────────────
-    case 0: {
-        const int SW = CW - 64;
-        auto Slider = [&](const char* label, float pct) {
-            RT(r, s_fontMd, label, IX, iy, { 195, 195, 195, 255 });
-            iy += 32;
-            // Track
-            SDL_SetRenderDrawColor(r, 48, 48, 88, 255);
-            SDL_Rect track = { IX, iy, SW, 14 };
-            SDL_RenderFillRect(r, &track);
-            // Fill
-            SDL_SetRenderDrawColor(r, 88, 158, 88, 255);
-            SDL_Rect fill = { IX, iy, (int)(SW * pct), 14 };
-            SDL_RenderFillRect(r, &fill);
-            // Thumb
-            SDL_SetRenderDrawColor(r, 148, 218, 148, 255);
-            SDL_Rect thumb = { IX + (int)(SW * pct) - 7, iy - 5, 14, 24 };
-            SDL_RenderFillRect(r, &thumb);
-            iy += 52;
-        };
-        Slider("Nhac nen (BGM)", 0.8f);
-        Slider("Hieu ung am thanh (SFX)", 0.65f);
-        iy += 8;
-        RT(r, s_fontSm, "(Tinh nang dieu chinh am luong se cap nhat sau)", IX, iy, { 75, 75, 75, 255 });
-        break;
-    }
-
-    // ── Phím chơi ───────────────────────────────────────────────
-    case 1: {
-        struct KM { const char* key; const char* desc; };
-        KM maps[] = {
-            { "W / A / S / D",     "Di chuyen con tro tren ban co" },
-            { "Mouse",             "Di chuyen, hover o co" },
-            { "Enter / Click",     "Dat quan co" },
-            { "ESC",               "Mo/tat menu dung game" },
-            { "L",                 "Luu game hien tai" },
-            { "T",                 "Vao man hinh tai game" },
-            { "R  (sau ket thuc)", "Bat dau van moi (giu diem)" },
-        };
-        for (auto& km : maps) {
-            SDL_SetRenderDrawColor(r, 38, 38, 72, 255);
-            SDL_Rect row = { IX - 10, iy - 5, CW - 44, 36 };
-            SDL_RenderFillRect(r, &row);
-            RT(r, s_fontSm, km.key,  IX + 5,   iy + 4, { 252, 218, 78, 255 });
-            RT(r, s_fontSm, km.desc, IX + 245,  iy + 4, { 185, 185, 185, 255 });
-            iy += 44;
+    int rowX = ST_PX + 80;
+    if (s_settingsTab == 0) {
+        const char* labels[2] = { "Music volume", "SFX volume" };
+        int vols[2] = { s_musicVol, s_sfxVol };
+        for (int k = 0; k < 2; k++) {
+            int rowY = ST_VolRowY(k);
+            RT(r, s_fontMd, labels[k], rowX, rowY, DT_LIGHT, false);
+            SDL_Rect mR = ST_VolMinus(k), pR = ST_VolPlus(k);
+            DrawButton(r, mR.x, mR.y, mR.w, mR.h, 0, "-");
+            char vb[8]; snprintf(vb, sizeof(vb), "%d%%", vols[k]);
+            RT(r, s_fontMd, vb, (mR.x + pR.x + pR.w)/2, rowY, DT_WARM, true);
+            DrawButton(r, pR.x, pR.y, pR.w, pR.h, 0, "+");
         }
-        break;
+    } else {
+        int rowY = ST_VolRowY(0);
+        RT(r, s_fontMd, "Particle effects", rowX, rowY, DT_LIGHT, false);
+        SDL_Rect tR = ST_ToggleR();
+        bool on = Particle_IsEnabled();
+        DrawButton(r, tR.x, tR.y, tR.w, tR.h, on ? 1 : 0, on ? "ON" : "OFF");
+        RT(r, s_fontSm, "Falling-leaf and sparkle effects when planting or harvesting.",
+           rowX, ST_VolRowY(1) - ST_VBH/2, DT_OFF, false);
     }
+}
 
-    // ── Luật chơi ───────────────────────────────────────────────
-    case 2: {
-        const char* rules[] = {
-            "LUAT CO CARO TIEU CHUAN (GOMOKU):",
-            "",
-            "1. Hai nguoi choi lan luot dat quan X va O.",
-            "   Nguoi choi 1 (X) di truoc, nguoi choi 2 (O) di sau.",
-            "",
-            "2. Nguoi dau tien co 5 quan lien tiep thang hang",
-            "   tren mot hang, cot, hoac duong cheo la THANG.",
-            "",
-            "3. Neu ban co day ma khong ai co 5 lien tiep -> HOA.",
-            "",
-            "4. Che do AI (PvE):",
-            "   EASY   = AI nhin truoc 2 nuoc (< 10ms)",
-            "   MEDIUM  = AI nhin truoc 4 nuoc (< 200ms)",
-            "   HARD    = AI nhin truoc 6 nuoc (< 1500ms)",
-        };
-        for (auto& rule : rules) {
-            if (rule[0] == '\0') { iy += 8; continue; }
-            bool isTitle = (rule[0] == 'L' && rule[1] == 'U');
-            SDL_Color rc = isTitle ? SDL_Color{ 252, 208, 58, 255 } : SDL_Color{ 182, 182, 182, 255 };
-            RT(r, s_fontSm, rule, IX, iy, rc);
-            iy += 26;
-        }
-        break;
-    }
-
-    // ── Thông tin ────────────────────────────────────────────────
-    case 3: {
-        RT(r, s_fontMd, "CO CARO  -  GOMOKU SDL2", CX, iy, { 218, 192, 78, 255 }, true);
-        iy += 42;
-        const char* lines[] = {
-            "Ngon ngu:   C++ (C++17)",
-            "Thu vien:   SDL2, SDL2_ttf, SDL2_mixer, SDL2_image",
-            "",
-            "He thong AI:",
-            "  Thuat toan:  Minimax + Alpha-Beta Pruning",
-            "  Toi uu hoa:  Move Ordering, Selective Sort, Time Limit",
-            "  Do sau:      EASY=2 | MEDIUM=4 | HARD=6",
-            "",
-            "He thong do hoa:",
-            "  Renderer:    SDL2 procedural (primitives + texture cache)",
-            "  Painter Alg: 5 layers (BG > Board > Pieces > Hover > UI)",
-            "  Alpha Blend: SDL_BLENDMODE_BLEND cho transparent board",
-            "",
-            "Phim tat:   ESC=Dung | L=Luu | T=Tai | R=Van moi",
-        };
-        for (auto& line : lines) {
-            if (line[0] == '\0') { iy += 10; continue; }
-            bool isSection = (line[0] == 'H' || line[0] == 'N' || line[0] == 'P');
-            SDL_Color lc = isSection ? SDL_Color{ 162, 208, 162, 255 } : SDL_Color{ 168, 168, 168, 255 };
-            RT(r, s_fontSm, line, IX, iy, lc);
-            iy += 26;
-        }
-        break;
-    }
-    }
-
-    RT(r, s_fontSm, "ESC hoac nut X de quay lai menu",
-       CX, WINDOW_HEIGHT - 30, COZY_TEXT_DARK, true);
+void UIManager_RenderText(SDL_Renderer* r, const char* text,
+                          int x, int y, SDL_Color color,
+                          bool center, int fontSize) {
+    TTF_Font* f = (fontSize == 2) ? s_fontLg
+                : (fontSize == 1) ? s_fontMd
+                                  : s_fontSm;
+    RT(r, f, text, x, y + 8, color, center);
 }

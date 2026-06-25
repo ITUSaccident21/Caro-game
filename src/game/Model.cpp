@@ -1,8 +1,6 @@
-#include "Model.h"
+#include "game/Model.h"
 #include <cstring>
 
-// Bắt đầu ván mới trong cùng session — giữ điểm, reset bàn cờ và lượt đi.
-// Không đụng đến tên người chơi (đã được UIManager set).
 void NewSession(_GAMESTATE& state)
 {
 	for (int i = 0; i < 2; i++)
@@ -10,8 +8,8 @@ void NewSession(_GAMESTATE& state)
 
 	for (int i = 0; i < BOARD_SIZE; i++)
 		for (int j = 0; j < BOARD_SIZE; j++) {
-			state._BOARD[i][j].x = j;   // lưu col index (thay thế tọa độ console cũ)
-			state._BOARD[i][j].y = i;   // lưu row index
+			state._BOARD[i][j].x = j;
+			state._BOARD[i][j].y = i;
 			state._BOARD[i][j].c = 0;
 		}
 
@@ -21,9 +19,8 @@ void NewSession(_GAMESTATE& state)
 	state.players[1].mark = L'O';
 }
 
-// Reset hoàn toàn: điểm số + bàn cờ + trạng thái lượt.
 // Không đụng đến tên người chơi — tên được set bởi App_Init (mặc định)
-// hoặc UIManager (sau khi user nhập).
+
 void ResetData(_GAMESTATE& state)
 {
 	for (int i = 0; i < 2; i++) {
@@ -45,8 +42,6 @@ void ResetData(_GAMESTATE& state)
 	state.players[1].mark = L'O';
 }
 
-// Đặt quân tại (row, col) theo lượt hiện tại.
-// Trả về giá trị quân được đặt (-1 hoặc 1), hoặc 0 nếu ô không hợp lệ.
 int CheckBoard(_GAMESTATE& state, int row, int col)
 {
 	if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return 0;

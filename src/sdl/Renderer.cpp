@@ -1,16 +1,10 @@
-#include "Renderer.h"
+#include "sdl/Renderer.h"
+#include "sdl/Easing.h"
+#include "sdl/HarvestResult.h"
 #include <cmath>
 #include <cstdlib>
-#include <algorithm>
-
-// ================================================================
-//  Renderer.cpp — Pure SDL2 primitives
-//
-//  Quân cờ: X (Player 1, đỏ) và O (Player 2, xanh dương)
-//  Board: gỗ sáng với lưới nâu, 5 star points chuẩn Gomoku
-// ================================================================
-
-// ── Primitive helpers ────────────────────────────────────────────
+#include <cstdio>
+#include <string>
 
 static void DrawFilledCircle(SDL_Renderer* r, int cx, int cy, int radius) {
     for (int dy = -radius; dy <= radius; dy++) {
@@ -19,7 +13,6 @@ static void DrawFilledCircle(SDL_Renderer* r, int cx, int cy, int radius) {
     }
 }
 
-// Đường thẳng dày bằng cách offset theo vector pháp tuyến
 static void DrawThickLine(SDL_Renderer* r, int x1, int y1, int x2, int y2, int thickness) {
     float dx = static_cast<float>(x2 - x1);
     float dy = static_cast<float>(y2 - y1);
@@ -36,19 +29,19 @@ static void DrawThickLine(SDL_Renderer* r, int x1, int y1, int x2, int y2, int t
     }
 }
 
-// Ký hiệu X: hai đường chéo dày
+static float MaxFloat(float a, float b) { return (a > b) ? a : b; }
+
 static void DrawX(SDL_Renderer* r, int cx, int cy, int half, int thickness = 4) {
     DrawThickLine(r, cx - half, cy - half, cx + half, cy + half, thickness);
     DrawThickLine(r, cx + half, cy - half, cx - half, cy + half, thickness);
 }
 
-// Ký hiệu O: vòng tròn rỗng (scanline ring)
 static void DrawO(SDL_Renderer* r, int cx, int cy, int radius, int thickness = 4) {
     int inner = radius - thickness;
     for (int dy = -radius; dy <= radius; dy++) {
-        float dxo = std::sqrt(std::max(0.0f, static_cast<float>(radius*radius - dy*dy)));
+        float dxo = std::sqrt(MaxFloat(0.0f, static_cast<float>(radius*radius - dy*dy)));
         float dxi = (inner > 0)
-                    ? std::sqrt(std::max(0.0f, static_cast<float>(inner*inner - dy*dy)))
+                    ? std::sqrt(MaxFloat(0.0f, static_cast<float>(inner*inner - dy*dy)))
                     : 0.0f;
         int lo = static_cast<int>(dxi) + 1;
         int hi = static_cast<int>(dxo);
@@ -59,299 +52,664 @@ static void DrawO(SDL_Renderer* r, int cx, int cy, int radius, int thickness = 4
     }
 }
 
-// ── Module state ─────────────────────────────────────────────────
 static SDL_Renderer* s_renderer = nullptr;
 
-// Piece textures (DR-001)
+static SDL_Texture* s_sceneBg          = nullptr;
+static SDL_Texture* s_sceneBoardShadow = nullptr;
+static SDL_Texture* s_sceneBoardFrame  = nullptr;
+static SDL_Texture* s_sceneGrid        = nullptr;
+static SDL_Texture* s_scenePieceShadow = nullptr;
+static SDL_Texture* s_sceneHover       = nullptr;
+static SDL_Texture* s_sceneLastMove    = nullptr;
+static SDL_Texture* s_sceneWinGlow     = nullptr;
+static SDL_Texture* s_sceneForeground  = nullptr;
+static SDL_Texture* s_pieceContactPatch = nullptr;
+
+static SDL_Texture* s_boardSoil  = nullptr;
+static SDL_Texture* s_boardGrid  = nullptr;
+static SDL_Texture* s_boardFrame = nullptr;
+static bool         s_boardReady = false;
+
+static SDL_Texture* s_terrainSoil     = nullptr;
+static SDL_Texture* s_terrainFurrows  = nullptr;
+static SDL_Texture* s_terrainFrame    = nullptr;
+static SDL_Texture* s_terrainSoilSoft = nullptr;
+
+static SDL_Texture* s_growthTex[2][3] = { { nullptr } };
+static bool         s_growthReady = false;
+
 static SDL_Texture* s_texX = nullptr;
 static SDL_Texture* s_texO = nullptr;
 static int          s_pieceSize = 0;
 
-// Background textures: menu/ui = Yellow, game = Blue
-static SDL_Texture* s_bgMenu = nullptr;
-static SDL_Texture* s_bgGame = nullptr;
+struct CellAnimation {
+    bool  active;
+    float elapsed;
+};
+static CellAnimation s_cellAnims[BOARD_SIZE][BOARD_SIZE] = {};
+static const float WIGGLE_DUR    = 0.44f;
+static const float SQUASH_DUR    = 0.18f;
+static const float ERUPT_DUR     = 0.82f;
+static const float POP_DUR       = WIGGLE_DUR + SQUASH_DUR + ERUPT_DUR;
+static const float PI_F          = 3.14159265f;
+static const float PLACE_RISE_PX = 8.0f;
 
-// Board skin textures (random per ván)
-#define N_BOARDS 4
-static SDL_Texture* s_boardTex[N_BOARDS] = {};
-static int          s_boardCount   = 0;
-static int          s_currentBoard = 0;
+void Renderer_TriggerPiecePop(int row, int col) {
+    if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+    s_cellAnims[row][col].active = true;
+    s_cellAnims[row][col].elapsed = 0.0f;
+}
 
-// Decoration sprites (Cozy Lands)
-static SDL_Texture* s_decoTree    = nullptr;
-static SDL_Texture* s_decoBush    = nullptr;
-static SDL_Texture* s_decoFlower  = nullptr;
+void Renderer_ResetCellAnims() {
+    for (int row = 0; row < BOARD_SIZE; row++)
+        for (int col = 0; col < BOARD_SIZE; col++)
+            s_cellAnims[row][col] = {};
+}
+
+void Renderer_UpdatePop(float dt) {
+    for (int row = 0; row < BOARD_SIZE; row++) {
+        for (int col = 0; col < BOARD_SIZE; col++) {
+            if (!s_cellAnims[row][col].active) continue;
+            s_cellAnims[row][col].elapsed += dt;
+            if (s_cellAnims[row][col].elapsed >= POP_DUR)
+                s_cellAnims[row][col].active = false;
+        }
+    }
+}
+
+struct PlacementPose {
+    int   stage;
+    float scaleX;
+    float scaleY;
+    int   riseY;
+    bool  active;
+};
+
+static PlacementPose PlacementPoseAt(float elapsed, int row, int col) {
+    PlacementPose p = { 3, 1.0f, 1.0f, 0, elapsed < POP_DUR };
+    if (elapsed < 0.0f) elapsed = 0.0f;
+
+    if (elapsed < WIGGLE_DUR) {
+        float wave = (float)std::sin(elapsed / WIGGLE_DUR * 3.5f * PI_F);
+        p.stage = 0;
+        p.scaleY = 1.0f + 0.10f * wave;
+        p.scaleX = 1.0f - 0.045f * wave;
+        p.riseY = 0;
+        return p;
+    }
+
+    if (elapsed < WIGGLE_DUR + SQUASH_DUR) {
+        float u = EaseInCubic((elapsed - WIGGLE_DUR) / SQUASH_DUR);
+        p.stage = 0;
+        p.scaleY = LerpFloat(0.90f, 0.30f, u);
+        p.scaleX = LerpFloat(1.045f, 1.40f, u);
+        p.riseY = 0;
+        return p;
+    }
+
+    float u = Clamp01((elapsed - WIGGLE_DUR - SQUASH_DUR) / ERUPT_DUR);
+    p.stage = 3;
+    if (u < 0.18f) {
+        float q = EaseOutCubic(u / 0.18f);
+        p.scaleY = LerpFloat(0.30f, 1.20f, q);
+        p.scaleX = LerpFloat(1.40f, 0.92f, q);
+        p.riseY = (int)(PLACE_RISE_PX * q);
+    } else {
+        float q = (u - 0.18f) / 0.82f;
+        float spring = (float)(std::exp(-5.0f * q) * std::cos(22.0f * q));
+        p.scaleY = 1.0f + 0.16f * spring;
+        p.scaleX = 1.0f - 0.08f * spring;
+        p.riseY = (int)(PLACE_RISE_PX * (1.0f - EaseOutCubic(q)));
+    }
+    return p;
+}
 
 bool Renderer_Init(SDL_Renderer* renderer) {
     s_renderer = renderer;
     if (!renderer) return false;
 
-    // Background textures (fallback = nullptr → procedural)
-    // bg_menu.jpg: pixel art sky với mây — dùng cho menu/ui/load screens
-    // bg_game.png: dùng cho game screen (hoặc fallback nếu không có)
-    s_bgMenu = IMG_LoadTexture(renderer, "assets/sprites/bg_menu.jpg");
-    s_bgGame = IMG_LoadTexture(renderer, "assets/sprites/bg_game.png");
-    // Nếu bg_game chưa có, dùng chung bg_menu
-    if (!s_bgGame) s_bgGame = s_bgMenu;
-
-    // Board skins — load tuần tự, dừng khi không tìm thấy file
-    const char* boardPaths[N_BOARDS] = {
-        "assets/sprites/board_01.jpg",
-        "assets/sprites/board_02.jpg",
-        "assets/sprites/board_03.jpg",
-        "assets/sprites/board_04.jpg",
+    const char* scenePath = "assets/gameplay/match_scene/";
+    auto LoadSceneTexture = [&](const char* file) -> SDL_Texture* {
+        std::string path = std::string(scenePath) + file;
+        SDL_Texture* t = IMG_LoadTexture(renderer, path.c_str());
+        if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+        return t;
     };
-    s_boardCount = 0;
-    for (int i = 0; i < N_BOARDS; i++) {
-        s_boardTex[i] = IMG_LoadTexture(renderer, boardPaths[i]);
-        if (s_boardTex[i]) s_boardCount++;
-        else               break;
+    s_sceneBg          = LoadSceneTexture("background_grove_day.png");
+    s_sceneBoardShadow = LoadSceneTexture("board_shadow.png");
+    s_sceneBoardFrame  = LoadSceneTexture("board_frame.png");
+    s_sceneGrid        = LoadSceneTexture("board_grid.png");
+    s_scenePieceShadow = LoadSceneTexture("piece_shadow.png");
+    s_sceneHover       = LoadSceneTexture("cell_hover.png");
+    s_sceneLastMove    = LoadSceneTexture("cell_last_move.png");
+    s_sceneWinGlow     = LoadSceneTexture("cell_win_glow.png");
+    s_sceneForeground  = LoadSceneTexture("foreground_foliage.png");
+
+#ifdef BERRY_BOARD_12
+    if (s_sceneGrid) { SDL_DestroyTexture(s_sceneGrid); s_sceneGrid = nullptr; }
+    s_sceneGrid = IMG_LoadTexture(renderer, "assets/gameplay/board_detail/grid_overlay_12x12.png");
+    if (s_sceneGrid) SDL_SetTextureBlendMode(s_sceneGrid, SDL_BLENDMODE_BLEND);
+#endif
+    s_pieceContactPatch = IMG_LoadTexture(renderer, "assets/gameplay/board_detail/piece_contact_patch.png");
+    if (s_pieceContactPatch) SDL_SetTextureBlendMode(s_pieceContactPatch, SDL_BLENDMODE_BLEND);
+
+    const char* boardPath = "assets/gameplay/garden_board/";
+    s_boardSoil  = IMG_LoadTexture(renderer, (std::string(boardPath) + "soil_base_12x12.png").c_str());
+    s_boardGrid  = IMG_LoadTexture(renderer, (std::string(boardPath) + "grid_overlay_12x12.png").c_str());
+    s_boardFrame = IMG_LoadTexture(renderer, (std::string(boardPath) + "edge_frame.png").c_str());
+    for (SDL_Texture* t : { s_boardSoil, s_boardGrid, s_boardFrame })
+        if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+    s_boardReady = (s_boardSoil && s_boardGrid && s_boardFrame);
+
+    const char* terrainPath = "assets/gameplay/terrain/";
+    s_terrainSoil    = IMG_LoadTexture(renderer, (std::string(terrainPath) + "soil_base.png").c_str());
+    s_terrainFurrows = IMG_LoadTexture(renderer, (std::string(terrainPath) + "furrows.png").c_str());
+    s_terrainFrame   = IMG_LoadTexture(renderer, (std::string(terrainPath) + "frame_ring.png").c_str());
+    for (SDL_Texture* t : { s_terrainSoil, s_terrainFurrows, s_terrainFrame })
+        if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+
+    if (s_boardSoil) {
+        SDL_SetTextureScaleMode(s_boardSoil, SDL_ScaleModeLinear);
+        SDL_Texture* prev = SDL_GetRenderTarget(renderer);
+        auto downStep = [&](SDL_Texture* src, int sz) -> SDL_Texture* {
+            SDL_Texture* dst = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA8888,
+                                                 SDL_TEXTUREACCESS_TARGET, sz, sz);
+            if (!dst) return nullptr;
+            SDL_SetTextureScaleMode(dst, SDL_ScaleModeLinear);
+            SDL_SetTextureBlendMode(dst, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderTarget(renderer, dst);
+            SDL_RenderClear(renderer);
+            SDL_Rect d = { 0, 0, sz, sz };
+            SDL_RenderCopy(renderer, src, nullptr, &d);
+            return dst;
+        };
+        SDL_Texture* step1 = downStep(s_boardSoil, 256);
+        SDL_Texture* step2 = step1 ? downStep(step1, 64)
+                                   : downStep(s_boardSoil, 64);
+        SDL_SetRenderTarget(renderer, prev);
+        if (step1 && step1 != step2) SDL_DestroyTexture(step1);
+        s_terrainSoilSoft = step2;
     }
 
-    // Decoration sprites
-    s_decoTree   = IMG_LoadTexture(renderer, "assets/sprites/deco_tree.png");
-    s_decoBush   = IMG_LoadTexture(renderer, "assets/sprites/deco_bush.png");
-    s_decoFlower = IMG_LoadTexture(renderer, "assets/sprites/deco_flower_y.png");
+    const char* kBerry[2]       = { "strawberry", "blueberry" };
+    const int   kGrowthFiles[3] = { 1, 2, 4 };
+    s_growthReady = true;
+    for (int f = 0; f < 2; f++) {
+        for (int s = 0; s < 3; s++) {
+            char path[96];
+            std::snprintf(path, sizeof(path), "assets/sprites/growth/%s_growth_0%d.png", kBerry[f], kGrowthFiles[s]);
+            s_growthTex[f][s] = IMG_LoadTexture(renderer, path);
+            if (s_growthTex[f][s]) SDL_SetTextureBlendMode(s_growthTex[f][s], SDL_BLENDMODE_BLEND);
+            else                   s_growthReady = false;
+        }
+    }
 
     return true;
 }
 
 void Renderer_Shutdown() {
     auto Destroy = [](SDL_Texture*& t){ if(t){ SDL_DestroyTexture(t); t=nullptr; } };
-    Destroy(s_bgMenu); Destroy(s_bgGame);
-    for (int i = 0; i < N_BOARDS; i++) Destroy(s_boardTex[i]);
-    Destroy(s_decoTree); Destroy(s_decoBush); Destroy(s_decoFlower);
+    Destroy(s_sceneBg); Destroy(s_sceneBoardShadow); Destroy(s_sceneBoardFrame);
+    Destroy(s_sceneGrid); Destroy(s_scenePieceShadow); Destroy(s_sceneHover);
+    Destroy(s_sceneLastMove); Destroy(s_sceneWinGlow); Destroy(s_sceneForeground);
+    Destroy(s_pieceContactPatch);
+    Destroy(s_boardSoil); Destroy(s_boardGrid); Destroy(s_boardFrame);
+    Destroy(s_terrainSoil); Destroy(s_terrainFurrows); Destroy(s_terrainFrame); Destroy(s_terrainSoilSoft);
+    for (int f = 0; f < 2; f++) for (int s = 0; s < 3; s++) Destroy(s_growthTex[f][s]);
     s_renderer = nullptr;
 }
 
-void Renderer_RandomizeBoard() {
-    if (s_boardCount > 1)
-        s_currentBoard = rand() % s_boardCount;
-    else
-        s_currentBoard = 0;
+static void BlitTexture(SDL_Renderer* r, SDL_Texture* t, int x, int y, int w, int h) {
+    if (!t) return;
+    SDL_Rect dst = { x, y, w, h };
+    SDL_RenderCopy(r, t, nullptr, &dst);
 }
 
+static const float     PIECE_SHADOW_ALPHA_MULT    = 0.85f;
+static const float     PIECE_SHADOW_SOFTNESS_SCALE = 1.0f;
+static const int       BOARD_READABILITY_DIM_ALPHA = 18;
+static const SDL_Color BOARD_READABILITY_DIM_COLOR = { 104, 70, 44, 255 };
+static const float     WIN_GLOW_ALPHA_MULT        = 0.82f;
+static const float     HOVER_ALPHA_MULT           = 1.0f;
 
-// ── Background ───────────────────────────────────────────────────
-// Painter's Algorithm Layer 0: phủ toàn màn hình trước mọi thứ khác
-// isGameScreen=true → bg_game (blue), false → bg_menu (yellow)
-// Nếu texture chưa load → fallback procedural màu đơn
-void Renderer_DrawBackground(SDL_Renderer* r, bool isGameScreen) {
-    SDL_Texture* bg = isGameScreen ? s_bgGame : s_bgMenu;
-
-    if (bg) {
-        // Scale texture PNG cho vừa cửa sổ
-        SDL_Rect dst = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
-        SDL_RenderCopy(r, bg, nullptr, &dst);
-
-        // Scatter decoration sprites ở các góc
-        if (s_decoTree) {
-            SDL_Rect t1 = { -8,  WINDOW_HEIGHT-96, 88, 88 };
-            SDL_Rect t2 = { WINDOW_WIDTH-72, WINDOW_HEIGHT-88, 80, 80 };
-            SDL_RenderCopy(r, s_decoTree, nullptr, &t1);
-            SDL_RenderCopy(r, s_decoTree, nullptr, &t2);
-        }
-        if (s_decoBush) {
-            SDL_Rect b1 = { 12,  WINDOW_HEIGHT-58, 60, 58 };
-            SDL_Rect b2 = { WINDOW_WIDTH-68, WINDOW_HEIGHT-56, 60, 56 };
-            SDL_RenderCopy(r, s_decoBush, nullptr, &b1);
-            SDL_RenderCopy(r, s_decoBush, nullptr, &b2);
-        }
-        if (s_decoFlower && !isGameScreen) {
-            // Hoa chỉ hiển thị ở màn menu/ui, không hiển thị trong game
-            SDL_Rect f1 = { 80, WINDOW_HEIGHT-42, 36, 36 };
-            SDL_RenderCopy(r, s_decoFlower, nullptr, &f1);
-        }
-    } else {
-        // Fallback: procedural gradient đơn giản
-        SDL_SetRenderDrawColor(r, isGameScreen ? 42 : 212,
-                                  isGameScreen ? 72 : 195,
-                                  isGameScreen ? 42 : 158, 255);
-        SDL_Rect full = { 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT };
-        SDL_RenderFillRect(r, &full);
-    }
+static inline Uint8 AlphaMul(float m) {
+    int a = (int)(255.0f * m + 0.5f);
+    return (Uint8)(a < 0 ? 0 : (a > 255 ? 255 : a));
 }
 
-// ── Board ────────────────────────────────────────────────────────
-// Nếu có board texture → blit 740×740 tại offset (-40,-40) từ board area
-//   → frame của ảnh hiện ra ngoài, panel HUD che phần nhô
-// Fallback → checkerboard procedural bán trong suốt (cũ)
-void Renderer_DrawBoard(SDL_Renderer* r, const _GAMESTATE& /*state*/) {
-    if (s_boardCount > 0 && s_boardTex[s_currentBoard]) {
-        // board.jpg là 1024×1024, frame ~113px mỗi cạnh (~11% ảnh gốc)
-        // Điều kiện để grid nằm sau frame: offset > 113×(660+2×offset)/1024 → offset > 93.5
-        // Dùng 100px làm margin an toàn: frame scaled = 113×(860/1024) ≈ 95px < 100
-        static const int BOARD_IMG_OFFSET = 100;
-        static const int BOARD_IMG_SIZE   = BOARD_PIXEL_SIZE + 2 * BOARD_IMG_OFFSET; // 860
-        SDL_Rect dst = { BOARD_OFFSET_X - BOARD_IMG_OFFSET,
-                         BOARD_OFFSET_Y - BOARD_IMG_OFFSET,
-                         BOARD_IMG_SIZE, BOARD_IMG_SIZE };
-        SDL_RenderCopy(r, s_boardTex[s_currentBoard], nullptr, &dst);
-    } else {
-        // Fallback: viền + checkerboard procedural
-        SDL_SetRenderDrawColor(r, 90, 60, 25, 255);
-        SDL_Rect border = { BOARD_OFFSET_X-6, BOARD_OFFSET_Y-6,
-                            BOARD_PIXEL_SIZE+12, BOARD_PIXEL_SIZE+12 };
-        SDL_RenderFillRect(r, &border);
+static const int   BOARD_FRAME_X       = 402;
+static const int   BOARD_FRAME_Y       = 7;
+static const int   BOARD_FRAME_SIZE    = 1114;
+static const Uint8 BOARD_FRAME_ALPHA   = 232;
+static const Uint8 BOARD_FRAME_COLOR_R = 238;
+static const Uint8 BOARD_FRAME_COLOR_G = 224;
+static const Uint8 BOARD_FRAME_COLOR_B = 198;
 
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-        for (int row = 0; row < BOARD_SIZE; row++) {
-            for (int col = 0; col < BOARD_SIZE; col++) {
-                bool light = (row + col) % 2 == 0;
-                SDL_SetRenderDrawColor(r,
-                    light ? 215 : 185, light ? 185 : 155, light ? 138 : 108,
-                    light ? 160 : 140);
-                SDL_Rect cell = { BOARD_OFFSET_X + col*CELL_SIZE,
-                                  BOARD_OFFSET_Y + row*CELL_SIZE, CELL_SIZE, CELL_SIZE };
-                SDL_RenderFillRect(r, &cell);
+static int CellHash(int row, int col) {
+    int h = row * 928371 + col * 689287 + row * col * 37;
+    h ^= (h >> 13);
+    return h & 0x7fffffff;
+}
+
+static void DrawCellSoilVariation(SDL_Renderer* r) {
+#ifdef BERRY_BOARD_12
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    for (int row = 0; row < BOARD_SIZE; row++) {
+        for (int col = 0; col < BOARD_SIZE; col++) {
+            int h = CellHash(row, col);
+            int x = BOARD_OFFSET_X + col * CELL_SIZE;
+            int y = BOARD_OFFSET_Y + row * CELL_SIZE;
+            SDL_Rect cell = { x + 2, y + 2, CELL_SIZE - 4, CELL_SIZE - 4 };
+
+            switch (h % 6) {
+            case 0: SDL_SetRenderDrawColor(r, 105, 64, 36, 9); break;
+            case 1: SDL_SetRenderDrawColor(r, 197, 125, 66, 7); break;
+            case 2: SDL_SetRenderDrawColor(r, 80, 52, 32, 6); break;
+            case 3: SDL_SetRenderDrawColor(r, 218, 154, 88, 5); break;
+            default: SDL_SetRenderDrawColor(r, 0, 0, 0, 0); break;
+            }
+            if ((h % 6) < 4) SDL_RenderFillRect(r, &cell);
+
+            if ((h % 11) == 3) {
+                SDL_SetRenderDrawColor(r, 78, 48, 28, 24);
+                DrawFilledCircle(r, x + 18 + (h % 19), y + 22 + ((h / 7) % 23), 2);
+            } else if ((h % 13) == 5) {
+                SDL_SetRenderDrawColor(r, 190, 126, 68, 18);
+                DrawFilledCircle(r, x + 26 + (h % 17), y + 30 + ((h / 9) % 19), 2);
             }
         }
-        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-    }
-
-    // Grid lines + star points luôn vẽ lên trên (dù texture hay procedural)
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 55, 32, 10, 140);
-    for (int i = 0; i <= BOARD_SIZE; i++) {
-        int x = BOARD_OFFSET_X + i * CELL_SIZE;
-        SDL_RenderDrawLine(r, x, BOARD_OFFSET_Y, x, BOARD_OFFSET_Y + BOARD_PIXEL_SIZE);
-        int y = BOARD_OFFSET_Y + i * CELL_SIZE;
-        SDL_RenderDrawLine(r, BOARD_OFFSET_X, y, BOARD_OFFSET_X + BOARD_PIXEL_SIZE, y);
     }
     SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+#endif
+}
 
-    static const int STARS[][2] = { {3,3},{3,11},{11,3},{11,11},{7,7} };
-    SDL_SetRenderDrawColor(r, 52, 28, 8, 255);
-    for (auto& s : STARS) {
-        DrawFilledCircle(r, BOARD_OFFSET_X + s[1]*CELL_SIZE, BOARD_OFFSET_Y + s[0]*CELL_SIZE, 4);
+void Renderer_DrawMatchBackground(SDL_Renderer* r) {
+    BlitTexture(r, s_sceneBg, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+}
+
+static void DrawBoardReadabilityDim(SDL_Renderer* r) {
+    if (BOARD_READABILITY_DIM_ALPHA > 0) {
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(r, BOARD_READABILITY_DIM_COLOR.r, BOARD_READABILITY_DIM_COLOR.g,
+                               BOARD_READABILITY_DIM_COLOR.b, (Uint8)BOARD_READABILITY_DIM_ALPHA);
+        SDL_Rect soil = { BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_PIXEL_SIZE, BOARD_PIXEL_SIZE };
+        SDL_RenderFillRect(r, &soil);
+        SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
     }
 }
 
-// ── Pieces (X và O) ──────────────────────────────────────────────
+void Renderer_DrawBoard(SDL_Renderer* r) {
+#ifdef BERRY_BOARD_12
+    if (s_boardReady) {
+        const int PX = BOARD_OFFSET_X, PY = BOARD_OFFSET_Y, PS = BOARD_PIXEL_SIZE;
+
+        BlitTexture(r, s_sceneBoardShadow, 410, 31, 1100, 1100);
+
+        const bool ringOnTop = (s_terrainFrame != nullptr);
+        if (!ringOnTop) {
+            SDL_SetTextureAlphaMod(s_boardFrame, BOARD_FRAME_ALPHA);
+            SDL_SetTextureColorMod(s_boardFrame, BOARD_FRAME_COLOR_R, BOARD_FRAME_COLOR_G, BOARD_FRAME_COLOR_B);
+            BlitTexture(r, s_boardFrame, BOARD_FRAME_X, BOARD_FRAME_Y, BOARD_FRAME_SIZE, BOARD_FRAME_SIZE);
+            SDL_SetTextureAlphaMod(s_boardFrame, 255);
+            SDL_SetTextureColorMod(s_boardFrame, 255, 255, 255);
+        }
+
+        const int OVER = ringOnTop ? 0 : 8;
+        SDL_Texture* soil = s_terrainSoil ? s_terrainSoil
+                          : (s_terrainSoilSoft ? s_terrainSoilSoft : s_boardSoil);
+        BlitTexture(r, soil, PX - OVER, PY - OVER, PS + 2 * OVER, PS + 2 * OVER);
+
+        if (!s_terrainSoil) DrawCellSoilVariation(r);
+
+        SDL_Texture* furrows = s_terrainFurrows ? s_terrainFurrows
+                             : (s_terrainSoil   ? nullptr : s_boardGrid);
+        if (furrows) BlitTexture(r, furrows, PX, PY, PS, PS);
+
+        DrawBoardReadabilityDim(r);
+
+        if (ringOnTop)
+            BlitTexture(r, s_terrainFrame, BOARD_FRAME_X, BOARD_FRAME_Y, BOARD_FRAME_SIZE, BOARD_FRAME_SIZE);
+
+        return;
+    }
+#endif
+    BlitTexture(r, s_sceneBoardShadow, 410, 31, 1100, 1100);
+    BlitTexture(r, s_sceneBoardFrame,  466, 71,  988,  988);
+    BlitTexture(r, s_sceneGrid, BOARD_OFFSET_X, BOARD_OFFSET_Y, BOARD_PIXEL_SIZE, BOARD_PIXEL_SIZE);
+    DrawBoardReadabilityDim(r);
+}
+
+struct PiecePresetSpec {
+    int  pieceSize;
+    int  shadowW, shadowH;
+    int  shadowYOff;
+    int  pieceYOff;
+    const char* name;
+};
+static const PiecePresetSpec kPiecePresets[] = {
+    { 62, 88, 46,  9, -7, "BASELINE" },
+    { 66, 94, 50, 10,  0, "MEDIUM"   },
+    { 72,102, 54, 11,  0, "LARGE"    },
+    { 76,108, 56, 12,  0, "XL"       },
+    { 78,104, 52, 13,  0, "12-78"    },
+    { 84,110, 54, 14,  0, "12-84"    },
+    { 88,116, 56, 14,  0, "12-88"    },
+};
+static const int  kPiecePresetCount = (int)(sizeof(kPiecePresets) / sizeof(kPiecePresets[0]));
+#ifdef BERRY_BOARD_12
+static int        s_pieceReadability = 5;
+#else
+static int        s_pieceReadability = 2;
+#endif
+static bool       s_pieceDebugShown  = false;
+
+static const int  PIECE_BLUEBERRY_BONUS = 4;
+
+int Renderer_GetFactionPieceSize(int factionIdx) {
+    return kPiecePresets[s_pieceReadability].pieceSize
+         + (factionIdx == 1 ? PIECE_BLUEBERRY_BONUS : 0);
+}
+
+#ifdef BERRY_BOARD_12
+static const bool  PIECE_USE_CONTACT_PATCH        = true;
+static const int   PIECE_CONTACT_W                = 86;
+static const int   PIECE_CONTACT_H                = 50;
+static const int   PIECE_CONTACT_YOFF             = 11;
+static const float PIECE_SHADOW_ALPHA_MULT_ROOTED = 0.42f;
+#endif
+
+void Renderer_SetPieceReadability(int preset) {
+    if (preset < 0) preset = 0;
+    if (preset >= kPiecePresetCount) preset = kPiecePresetCount - 1;
+    s_pieceReadability = preset;
+}
+void Renderer_CyclePieceReadability() {
+    s_pieceReadability = (s_pieceReadability + 1) % kPiecePresetCount;
+    s_pieceDebugShown = true;
+}
+const char* Renderer_GetPieceReadabilityName() { return kPiecePresets[s_pieceReadability].name; }
+bool Renderer_IsPieceDebugShown() { return s_pieceDebugShown; }
+
+static const float REST_FOLIAGE_SCALE = 1.25f;
+
+static void DrawRestingBerry(SDL_Renderer* r, int cx, int groundY, int faction,
+                             SDL_Texture* heroTex, int baseSize,
+                             float scaleX, float scaleY, int riseY) {
+    int gY = groundY - riseY;
+    static const float REST_FULL_PIECE_SCALE = 0.90f;
+    if (s_growthReady && s_growthTex[faction][2]) {
+        int fw = (int)(baseSize * REST_FULL_PIECE_SCALE * scaleX);
+        int fh = (int)(baseSize * REST_FULL_PIECE_SCALE * scaleY);
+        SDL_Rect fd = { cx - fw / 2, gY - fh, fw, fh };
+        SDL_RenderCopy(r, s_growthTex[faction][2], nullptr, &fd);
+        return;
+    }
+    if (s_growthReady) {
+        SDL_Texture* base = s_growthTex[faction][1];
+        if (base) {
+            int bw = (int)(baseSize * REST_FOLIAGE_SCALE * scaleX);
+            int bh = (int)(baseSize * REST_FOLIAGE_SCALE * scaleY);
+            SDL_Rect bd = { cx - bw / 2, gY - bh, bw, bh };
+            SDL_RenderCopy(r, base, nullptr, &bd);
+        }
+    }
+    if (heroTex) {
+        int hw = (int)(baseSize * scaleX);
+        int hh = (int)(baseSize * scaleY);
+        int heroBottom = gY - (int)(baseSize * 0.16f * scaleY);
+        SDL_Rect hd = { cx - hw / 2, heroBottom - hh, hw, hh };
+        SDL_RenderCopy(r, heroTex, nullptr, &hd);
+    }
+}
+
+static bool DrawGrowingPiece(SDL_Renderer* r, int cx, int groundY, int faction,
+                             SDL_Texture* finalTex, int baseSize, float p) {
+    if (!s_growthReady) return false;
+    if (p < 0.0f) p = 0.0f; else if (p > 1.0f) p = 1.0f;
+
+    const int   NB   = 3;
+    float beat = p * NB;
+    int   bi   = (int)beat; if (bi > NB - 1) bi = NB - 1;
+    float lt   = beat - bi;
+
+    float bounce = EaseOutBack(lt < 0.7f ? lt / 0.7f : 1.0f);
+    float beatGrow = (bi + (lt < 0.7f ? bounce : 1.0f)) / NB;
+    float grow     = 0.60f + 0.40f * beatGrow;
+    float riseT = (lt < 0.6f) ? lt / 0.6f : 1.0f;
+    int   riseY = (int)((1.0f - riseT) * 9.0f * (1.0f - 0.2f * bi));
+
+    if (bi < 2) {
+        int stageTex = bi;
+        SDL_Texture* gtex = s_growthTex[faction][stageTex];
+        if (gtex) {
+            int G = (int)(baseSize * 1.52f * grow);
+            int gy = (groundY - riseY) - G;
+            SDL_Rect gd = { cx - G / 2, gy, G, G };
+            SDL_RenderCopy(r, gtex, nullptr, &gd);
+        }
+    } else {
+        DrawRestingBerry(r, cx, groundY, faction, finalTex, baseSize, grow, grow, riseY);
+    }
+    return true;
+}
+
+static void DrawGrowthStage(SDL_Renderer* r, int cx, int groundY, SDL_Texture* tex,
+                            int baseSize, float scaleX, float scaleY, int riseY) {
+    if (!tex) return;
+    int w  = (int)(baseSize * 1.52f * scaleX);
+    int h  = (int)(baseSize * 1.52f * scaleY);
+    int gY = groundY - riseY;
+    SDL_Rect d = { cx - w / 2, gY - h, w, h };
+    SDL_RenderCopy(r, tex, nullptr, &d);
+}
+
+static void DrawCellBerry(SDL_Renderer* r, int row, int col, int cx, int groundY,
+                          int faction, SDL_Texture* heroTex, int baseSize, bool isLast) {
+    const CellAnimation& ca = s_cellAnims[row][col];
+    if (ca.active) {
+        PlacementPose p = PlacementPoseAt(ca.elapsed, row, col);
+        if (p.stage < 3) {
+
+            DrawGrowthStage(r, cx, groundY, s_growthTex[faction][0],
+                            baseSize, p.scaleX, p.scaleY, p.riseY);
+        } else {
+            DrawRestingBerry(r, cx, groundY, faction, heroTex, baseSize,
+                             p.scaleX, p.scaleY, p.riseY);
+        }
+        return;
+    }
+    if (!isLast) {
+        DrawRestingBerry(r, cx, groundY, faction, heroTex, baseSize, 1.0f, 1.0f, 0);
+        return;
+    }
+    float pulse = 0.5f + 0.5f * (float)std::sin(SDL_GetTicks() * 0.004f);
+    int   lift  = (int)(5.0f + 3.0f * pulse);
+    if (s_sceneWinGlow) {
+        int   g  = (int)(baseSize * 1.7f);
+        int   gcx = cx, gcy = (int)(groundY - baseSize * 0.45f - lift);
+        Uint8 gr = (faction == 1) ? 150 : 255;
+        Uint8 gg = (faction == 1) ? 190 : 170;
+        Uint8 gb = (faction == 1) ? 255 : 150;
+        SDL_SetTextureBlendMode(s_sceneWinGlow, SDL_BLENDMODE_ADD);
+        SDL_SetTextureColorMod(s_sceneWinGlow, gr, gg, gb);
+        SDL_SetTextureAlphaMod(s_sceneWinGlow, (Uint8)(38 + 46 * pulse));
+        SDL_Rect gd = { gcx - g / 2, gcy - g / 2, g, g };
+        SDL_RenderCopy(r, s_sceneWinGlow, nullptr, &gd);
+        SDL_SetTextureAlphaMod(s_sceneWinGlow, 255);
+        SDL_SetTextureColorMod(s_sceneWinGlow, 255, 255, 255);
+        SDL_SetTextureBlendMode(s_sceneWinGlow, SDL_BLENDMODE_BLEND);
+    }
+    DrawRestingBerry(r, cx, groundY, faction, heroTex, baseSize, 1.0f, 1.0f, lift);
+}
+
 void Renderer_DrawPieces(SDL_Renderer* r, const _GAMESTATE& state) {
-    int half = CELL_SIZE / 2 - 6;   // kích thước ký hiệu trong ô
+    const PiecePresetSpec& ps = kPiecePresets[s_pieceReadability];
+
+#ifdef BERRY_BOARD_12
+    const bool  usesPatch   = PIECE_USE_CONTACT_PATCH && s_pieceContactPatch;
+    const float shadowMult  = usesPatch ? PIECE_SHADOW_ALPHA_MULT_ROOTED : PIECE_SHADOW_ALPHA_MULT;
+#else
+    const float shadowMult  = PIECE_SHADOW_ALPHA_MULT;
+#endif
+
+    if (s_scenePieceShadow)
+        SDL_SetTextureAlphaMod(s_scenePieceShadow, AlphaMul(shadowMult));
+    const int shW = (int)(ps.shadowW * PIECE_SHADOW_SOFTNESS_SCALE);
+    const int shH = (int)(ps.shadowH * PIECE_SHADOW_SOFTNESS_SCALE);
+
     for (int row = 0; row < BOARD_SIZE; row++) {
         for (int col = 0; col < BOARD_SIZE; col++) {
             int c = state._BOARD[row][col].c;
             if (c == 0) continue;
 
+            if (HarvestResult_ShouldHideCell(row, col)) continue;
+
             int cx = BOARD_OFFSET_X + col * CELL_SIZE + CELL_SIZE / 2;
             int cy = BOARD_OFFSET_Y + row * CELL_SIZE + CELL_SIZE / 2;
 
+            int factionIdx = (c == -1) ? 0 : 1;
             SDL_Texture* tex = (c == -1) ? s_texX : s_texO;
-            if (tex) {
-                SDL_Rect dst = { cx - s_pieceSize/2, cy - s_pieceSize/2,
-                                 s_pieceSize, s_pieceSize };
-                SDL_RenderCopy(r, tex, NULL, &dst);
+            if (!tex) continue;
+
+            int baseSize = Renderer_GetFactionPieceSize(factionIdx);
+            int groundY  = cy + ps.pieceYOff + baseSize / 2;
+
+            const CellAnimation& ca = s_cellAnims[row][col];
+
+            if (s_growthReady) {
+                bool isLast = (row == state._LastI && col == state._LastJ &&
+                               state.gameStatus == CHUA_KET_THUC);
+                DrawCellBerry(r, row, col, cx, groundY, factionIdx, tex, baseSize, isLast);
+                continue;
             }
+
+#ifdef BERRY_BOARD_12
+            if (usesPatch)
+                BlitTexture(r, s_pieceContactPatch, cx - PIECE_CONTACT_W / 2,
+                        cy + PIECE_CONTACT_YOFF, PIECE_CONTACT_W, PIECE_CONTACT_H);
+#endif
+            BlitTexture(r, s_scenePieceShadow, cx - shW / 2, cy + ps.shadowYOff, shW, shH);
+
+            PlacementPose pose = ca.active
+                ? PlacementPoseAt(ca.elapsed, row, col)
+                : PlacementPose{ 3, 1.0f, 1.0f, 0, false };
+            int w = static_cast<int>(baseSize * pose.scaleX);
+            int h = static_cast<int>(baseSize * pose.scaleY);
+            int groundLine = cy + ps.pieceYOff + baseSize / 2 - pose.riseY;
+            SDL_Rect dst = { cx - w / 2, groundLine - h, w, h };
+            bool fadingIn = ca.active && ca.elapsed < 0.12f;
+            if (fadingIn) {
+                Uint8 pa = (Uint8)(255.0f * (0.35f + 0.65f * (ca.elapsed / 0.12f)));
+                SDL_SetTextureAlphaMod(tex, pa);
+            }
+            SDL_RenderCopy(r, tex, nullptr, &dst);
+            if (fadingIn) SDL_SetTextureAlphaMod(tex, 255);
         }
     }
+
+    if (s_scenePieceShadow) SDL_SetTextureAlphaMod(s_scenePieceShadow, 255);
 }
 
+static void DrawSoilHover(SDL_Renderer* r, int cx, int cy, float breathe) {
+    const int H = CELL_SIZE / 2;
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
+    for (int ring = 4; ring >= 0; ring--) {
+        int inset = ring * (H / 5);
+        Uint8 a = (Uint8)((9 + (4 - ring) * 8) * breathe);
+        SDL_SetRenderDrawColor(r, 224, 182, 108, a);
+        SDL_Rect g = { cx - H + inset, cy - H + inset,
+                       CELL_SIZE - inset * 2, CELL_SIZE - inset * 2 };
+        SDL_RenderFillRect(r, &g);
+    }
+    Uint8 ra = (Uint8)(80 * breathe);
+    SDL_SetRenderDrawColor(r, 58, 36, 16, ra);
+    SDL_Rect o1 = { cx - H + 3, cy - H + 3, CELL_SIZE - 6, CELL_SIZE - 6 };
+    SDL_RenderDrawRect(r, &o1);
+    SDL_SetRenderDrawColor(r, 58, 36, 16, (Uint8)(ra * 0.45f));
+    SDL_Rect o2 = { cx - H + 5, cy - H + 5, CELL_SIZE - 10, CELL_SIZE - 10 };
+    SDL_RenderDrawRect(r, &o2);
+    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
+}
 
-// ── Hover ────────────────────────────────────────────────────────
-// A: Ghost piece — dùng SDL_SetTextureAlphaMod để hiển thị quân mờ
-// D: Corner brackets — 4 góc L-shape thay ô đặc, tinh tế hơn
-void Renderer_DrawHover(SDL_Renderer* r, const _GAMESTATE& state) {
-    int row = state.hoveredRow, col = state.hoveredCol;
-    if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
-    if (state._BOARD[row][col].c != 0) return;
-    if (state.gameStatus != CHUA_KET_THUC) return;
+void Renderer_DrawMarkers(SDL_Renderer* r, const _GAMESTATE& state) {
+    const int M = CELL_SIZE, H = CELL_SIZE / 2;
+    const bool playing = (state.gameStatus == CHUA_KET_THUC);
 
-    int cx = BOARD_OFFSET_X + col * CELL_SIZE + CELL_SIZE / 2;
-    int cy = BOARD_OFFSET_Y + row * CELL_SIZE + CELL_SIZE / 2;
-    SDL_Rect cell = {
-        BOARD_OFFSET_X + col * CELL_SIZE + 1,
-        BOARD_OFFSET_Y + row * CELL_SIZE + 1,
-        CELL_SIZE - 2, CELL_SIZE - 2
-    };
+    if (playing && s_sceneLastMove && state.totalMoves > 0 &&
+        state._LastI >= 0 && state._LastI < BOARD_SIZE &&
+        state._LastJ >= 0 && state._LastJ < BOARD_SIZE) {
+        int cx = BOARD_OFFSET_X + state._LastJ * CELL_SIZE + CELL_SIZE / 2;
+        int cy = BOARD_OFFSET_Y + state._LastI * CELL_SIZE + CELL_SIZE / 2;
+        BlitTexture(r, s_sceneLastMove, cx - H, cy - H, M, M);
+    }
 
-    // Ghost piece: chỉ hiện khi đến lượt người chơi thật
+    int hr = state.hoveredRow, hc = state.hoveredCol;
     bool humanTurn = (state.mode == MODE_PVP) || (state.mode == MODE_PVE && state.turn);
-    if (humanTurn && s_texX && s_texO) {
-        SDL_Texture* ghost = state.turn ? s_texX : s_texO;
-        SDL_SetTextureAlphaMod(ghost, 75);
-        SDL_Rect dst = { cx - s_pieceSize/2, cy - s_pieceSize/2, s_pieceSize, s_pieceSize };
-        SDL_RenderCopy(r, ghost, nullptr, &dst);
-        SDL_SetTextureAlphaMod(ghost, 255);
+    if (humanTurn && playing &&
+        hr >= 0 && hr < BOARD_SIZE && hc >= 0 && hc < BOARD_SIZE &&
+        state._BOARD[hr][hc].c == 0) {
+        int cx = BOARD_OFFSET_X + hc * CELL_SIZE + CELL_SIZE / 2;
+        int cy = BOARD_OFFSET_Y + hr * CELL_SIZE + CELL_SIZE / 2;
+        float breathe = 0.72f + 0.28f * (0.5f + 0.5f * std::sin(SDL_GetTicks() * 0.005f));
+        DrawSoilHover(r, cx, cy, breathe);
+
+        int factionIdx = state.turn ? 0 : 1;
+        SDL_Texture* ghost = Renderer_GetPieceTexture(factionIdx);
+        if (ghost) {
+            const PiecePresetSpec& ps = kPiecePresets[s_pieceReadability];
+            int size = Renderer_GetFactionPieceSize(factionIdx);
+            SDL_Rect dst = { cx - size / 2, cy + ps.pieceYOff - size / 2, size, size };
+            SDL_SetTextureAlphaMod(ghost, (Uint8)(70 * breathe));
+            SDL_RenderCopy(r, ghost, nullptr, &dst);
+            SDL_SetTextureAlphaMod(ghost, 255);
+        }
     }
 
-    // Corner brackets: 4 góc L-shape thay vì tô đặc toàn ô
-    const int CL = 8;
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 255, 238, 0, 210);
-    // Góc trên-trái
-    SDL_RenderDrawLine(r, cell.x,          cell.y,          cell.x+CL,        cell.y);
-    SDL_RenderDrawLine(r, cell.x,          cell.y,          cell.x,            cell.y+CL);
-    // Góc trên-phải
-    SDL_RenderDrawLine(r, cell.x+cell.w,   cell.y,          cell.x+cell.w-CL, cell.y);
-    SDL_RenderDrawLine(r, cell.x+cell.w,   cell.y,          cell.x+cell.w,    cell.y+CL);
-    // Góc dưới-trái
-    SDL_RenderDrawLine(r, cell.x,          cell.y+cell.h,   cell.x+CL,        cell.y+cell.h);
-    SDL_RenderDrawLine(r, cell.x,          cell.y+cell.h,   cell.x,            cell.y+cell.h-CL);
-    // Góc dưới-phải
-    SDL_RenderDrawLine(r, cell.x+cell.w,   cell.y+cell.h,   cell.x+cell.w-CL, cell.y+cell.h);
-    SDL_RenderDrawLine(r, cell.x+cell.w,   cell.y+cell.h,   cell.x+cell.w,    cell.y+cell.h-CL);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
-}
-
-// ── Public symbol drawing ─────────────────────────────────────────
-void Renderer_DrawSymbolX(SDL_Renderer* r, int cx, int cy, int half, int thickness) {
-    DrawX(r, cx, cy, half, thickness);
-}
-
-void Renderer_DrawSymbolO(SDL_Renderer* r, int cx, int cy, int radius, int thickness) {
-    DrawO(r, cx, cy, radius, thickness);
-}
-
-// ── Win cells: đường thắng pulsing (thay blink ô) ────────────────
-// C: Dùng sin(t*2π) để tạo alpha dao động → gạch ngang 5 quân thắng
-void Renderer_DrawWinCells(SDL_Renderer* r, const _GAMESTATE& state) {
-    if (state.gameStatus == CHUA_KET_THUC || state.gameStatus == HOA) return;
-
-    // Validate
-    for (int k = 0; k < WIN_COUNT; k++) {
-        int col = state._WIN_CELLS[k].x, row = state._WIN_CELLS[k].y;
-        if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) return;
+    if (playing && s_sceneWinGlow && (state.gameStatus == P1_THANG || state.gameStatus == P2_THANG)) {
+        SDL_SetTextureAlphaMod(s_sceneWinGlow, AlphaMul(WIN_GLOW_ALPHA_MULT));
+        for (int k = 0; k < WIN_COUNT; k++) {
+            int col = state._WIN_CELLS[k].x, row = state._WIN_CELLS[k].y;
+            if (row < 0 || row >= BOARD_SIZE || col < 0 || col >= BOARD_SIZE) continue;
+            int cx = BOARD_OFFSET_X + col * CELL_SIZE + CELL_SIZE / 2;
+            int cy = BOARD_OFFSET_Y + row * CELL_SIZE + CELL_SIZE / 2;
+            BlitTexture(r, s_sceneWinGlow, cx - H, cy - H, M, M);
+        }
+        SDL_SetTextureAlphaMod(s_sceneWinGlow, 255);
     }
-
-    // Tâm pixel của ô đầu và ô cuối
-    int x1 = BOARD_OFFSET_X + state._WIN_CELLS[0].x * CELL_SIZE + CELL_SIZE / 2;
-    int y1 = BOARD_OFFSET_Y + state._WIN_CELLS[0].y * CELL_SIZE + CELL_SIZE / 2;
-    int xN = BOARD_OFFSET_X + state._WIN_CELLS[WIN_COUNT-1].x * CELL_SIZE + CELL_SIZE / 2;
-    int yN = BOARD_OFFSET_Y + state._WIN_CELLS[WIN_COUNT-1].y * CELL_SIZE + CELL_SIZE / 2;
-
-    // Alpha pulsing: dao động từ 120 đến 255 theo sóng sin
-    float t   = (SDL_GetTicks() % 1400) / 1400.0f;
-    Uint8 alp = static_cast<Uint8>(120 + 135 * std::sin(t * 2.0f * 3.14159f));
-
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(r, 255, 228, 0, alp);
-    DrawThickLine(r, x1, y1, xN, yN, 6);
-    // Đường mỏng hơn màu trắng ở giữa để nổi bật
-    SDL_SetRenderDrawColor(r, 255, 255, 200, static_cast<Uint8>(alp * 0.6f));
-    DrawThickLine(r, x1, y1, xN, yN, 2);
-    SDL_SetRenderDrawBlendMode(r, SDL_BLENDMODE_NONE);
 }
 
+void Renderer_DrawForeground(SDL_Renderer* r) {
+    BlitTexture(r, s_sceneForeground, 0, 0, WINDOW_WIDTH, WINDOW_HEIGHT);
+}
 
-// 
 bool Renderer_CreatePieceTextures(SDL_Renderer* renderer)
 {
+    s_texX = IMG_LoadTexture(renderer, "assets/sprites/piece_p1_gameplay_crop.png");
+    if (!s_texX) s_texX = IMG_LoadTexture(renderer, "assets/sprites/piece_p1.png");
+
+    s_texO = IMG_LoadTexture(renderer, "assets/sprites/piece_p2_single_blueberry_gameplay.png");
+    if (!s_texO) s_texO = IMG_LoadTexture(renderer, "assets/sprites/piece_p2_gameplay_crop.png");
+    if (!s_texO) s_texO = IMG_LoadTexture(renderer, "assets/sprites/piece_p2.png");
+    if (s_texX && s_texO) {
+        SDL_SetTextureBlendMode(s_texX, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureBlendMode(s_texO, SDL_BLENDMODE_BLEND);
+        s_pieceSize = 56;
+        return true;
+    }
+    if (s_texX) { SDL_DestroyTexture(s_texX); s_texX = nullptr; }
+    if (s_texO) { SDL_DestroyTexture(s_texO); s_texO = nullptr; }
+
     int size = CELL_SIZE;
     s_pieceSize = size;
     int half = size / 2 - 6;
 
-    // Tạo texture cho X
     s_texX = SDL_CreateTexture(renderer,
             SDL_PIXELFORMAT_RGBA8888,
             SDL_TEXTUREACCESS_TARGET, size, size);
     SDL_SetTextureBlendMode(s_texX, SDL_BLENDMODE_BLEND);
-
     SDL_SetRenderTarget(renderer, s_texX);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderClear(renderer);
-    // Stroke: vẽ lớp viền tối trước (lớn hơn 2px, dày hơn), rồi vẽ màu thật lên trên
     SDL_SetRenderDrawColor(renderer, 65, 15, 15, 255);
     DrawX(renderer, size/2, size/2, half+2, 6);
     SDL_SetRenderDrawColor(renderer, 215, 58, 58, 255);
@@ -362,7 +720,6 @@ bool Renderer_CreatePieceTextures(SDL_Renderer* renderer)
             SDL_PIXELFORMAT_RGBA8888,
             SDL_TEXTUREACCESS_TARGET, size, size);
     SDL_SetTextureBlendMode(s_texO, SDL_BLENDMODE_BLEND);
-
     SDL_SetRenderTarget(renderer, s_texO);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
     SDL_RenderClear(renderer);
@@ -375,6 +732,16 @@ bool Renderer_CreatePieceTextures(SDL_Renderer* renderer)
     return (s_texX && s_texO);
 }
 
+SDL_Texture* Renderer_GetPieceTexture(int playerIdx) {
+    return playerIdx == 0 ? s_texX : s_texO;
+}
+
+SDL_Texture* Renderer_GetGrowthFinalTexture(int factionIdx) {
+    if (!s_growthReady) return nullptr;
+    int f = (factionIdx == 0) ? 0 : 1;
+    return s_growthTex[f][2];
+}
+
 void Renderer_DestroyPieceTextures()
 {
     if(s_texX){SDL_DestroyTexture(s_texX); 
@@ -385,4 +752,3 @@ void Renderer_DestroyPieceTextures()
         s_texO = nullptr;
     }
 }
-

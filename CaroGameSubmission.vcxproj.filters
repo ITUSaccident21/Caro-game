@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{9C974137-60C3-4475-9C01-28DA786B5F0B}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx</Extensions>
+    </Filter>
+    <Filter Include="Source Files\ai">
+      <UniqueIdentifier>{7419792B-1E34-49B4-A687-46700892C78E}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\game">
+      <UniqueIdentifier>{0D3B86B8-8BD4-4991-8C62-B2F833F83570}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\sdl">
+      <UniqueIdentifier>{C9AF387B-52E3-4485-82BB-760C7B80651A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\tests">
+      <UniqueIdentifier>{7EBCB8E2-FB12-47DC-819E-88D3B60D21E6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{E5D5947D-3922-4036-B778-D4713D6E6FCA}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx</Extensions>
+    </Filter>
+    <Filter Include="Header Files\ai">
+      <UniqueIdentifier>{539490DA-64E7-4C8D-9578-4DBA789587B7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\game">
+      <UniqueIdentifier>{8E1FE96C-6F17-4B91-B761-1902B6736FB7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\sdl">
+      <UniqueIdentifier>{C783CC58-0E59-4776-BA79-0D88D8E53E03}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\tests">
+      <UniqueIdentifier>{CBB7FB20-AF97-4817-ACCA-2D7673358DBA}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ai\AIPlayer.cpp"><Filter>Source Files\ai</Filter></ClCompile>
+    <ClCompile Include="src\ai\AIWorker.cpp"><Filter>Source Files\ai</Filter></ClCompile>
+    <ClCompile Include="src\game\FileHandling.cpp"><Filter>Source Files\game</Filter></ClCompile>
+    <ClCompile Include="src\game\Model.cpp"><Filter>Source Files\game</Filter></ClCompile>
+    <ClCompile Include="src\sdl\App.cpp"><Filter>Source Files\sdl</Filter></ClCompile>
+    <ClCompile Include="src\sdl\AudioManager.cpp"><Filter>Source Files\sdl</Filter></ClCompile>
+    <ClCompile Include="src\sdl\Fade.cpp"><Filter>Source Files\sdl</Filter></ClCompile>
+    <ClCompile Include="src\sdl\HarvestResult.cpp"><Filter>Source Files\sdl</Filter></ClCompile>
+    <ClCompile Include="src\sdl\Particle.cpp"><Filter>Source Files\sdl</Filter></ClCompile>
+    <ClCompile Include="src\sdl\Renderer.cpp"><Filter>Source Files\sdl</Filter></ClCompile>
+    <ClCompile Include="src\sdl\UIManager.cpp"><Filter>Source Files\sdl</Filter></ClCompile>
+    <ClCompile Include="src\tests\SelfTest.cpp"><Filter>Source Files\tests</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ai\AIPlayer.h"><Filter>Header Files\ai</Filter></ClInclude>
+    <ClInclude Include="include\ai\AIWorker.h"><Filter>Header Files\ai</Filter></ClInclude>
+    <ClInclude Include="include\game\FileHandling.h"><Filter>Header Files\game</Filter></ClInclude>
+    <ClInclude Include="include\game\GameDef.h"><Filter>Header Files\game</Filter></ClInclude>
+    <ClInclude Include="include\game\Model.h"><Filter>Header Files\game</Filter></ClInclude>
+    <ClInclude Include="include\sdl\App.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\AudioManager.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\DesignTokens.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\Easing.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\Fade.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\HarvestResult.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\Particle.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\Renderer.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\sdl\UIManager.h"><Filter>Header Files\sdl</Filter></ClInclude>
+    <ClInclude Include="include\tests\SelfTest.h"><Filter>Header Files\tests</Filter></ClInclude>
+  </ItemGroup>
+</Project>

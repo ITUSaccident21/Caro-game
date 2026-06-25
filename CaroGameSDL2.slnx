@@ -1,7 +1,0 @@
-<Solution>
-  <Configurations>
-    <Platform Name="x64" />
-    <Platform Name="x86" />
-  </Configurations>
-  <Project Path="CaroGameSDL2/CaroGameSDL2.vcxproj" Id="a7253fd4-3de8-4b36-8766-3dd4cdfa5b5b" />
-</Solution>

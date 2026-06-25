@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{3F88C3EF-9C0D-4D34-82CF-2D4F14C0E421}</ProjectGuid>
+    <RootNamespace>CaroGameSubmission</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup Label="UserMacros" />
+
+  <PropertyGroup>
+    <SDL2Root Condition="'$(SDL2Root)'==''">$(ProjectDir)external\SDL2</SDL2Root>
+    <SDL2ImageRoot Condition="'$(SDL2ImageRoot)'==''">$(ProjectDir)external\SDL2_image</SDL2ImageRoot>
+    <SDL2TtfRoot Condition="'$(SDL2TtfRoot)'==''">$(ProjectDir)external\SDL2_ttf</SDL2TtfRoot>
+    <SDL2MixerRoot Condition="'$(SDL2MixerRoot)'==''">$(ProjectDir)external\SDL2_mixer</SDL2MixerRoot>
+    <TargetName>CaroGame</TargetName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(ProjectDir)Debug\</OutDir>
+    <IntDir>$(ProjectDir)build\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(ProjectDir)Release\</OutDir>
+    <IntDir>$(ProjectDir)build\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(SDL2Root)\include;$(SDL2ImageRoot)\include;$(SDL2TtfRoot)\include;$(SDL2MixerRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(SDL2Root)\lib\x64;$(SDL2ImageRoot)\lib\x64;$(SDL2TtfRoot)\lib\x64;$(SDL2MixerRoot)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>SDL2.lib;SDL2main.lib;SDL2_image.lib;SDL2_ttf.lib;SDL2_mixer.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(SDL2Root)\lib\x64\SDL2.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SDL2ImageRoot)\lib\x64\SDL2_image.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SDL2TtfRoot)\lib\x64\SDL2_ttf.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SDL2MixerRoot)\lib\x64\SDL2_mixer.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)include;$(SDL2Root)\include;$(SDL2ImageRoot)\include;$(SDL2TtfRoot)\include;$(SDL2MixerRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalLibraryDirectories>$(SDL2Root)\lib\x64;$(SDL2ImageRoot)\lib\x64;$(SDL2TtfRoot)\lib\x64;$(SDL2MixerRoot)\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>SDL2.lib;SDL2main.lib;SDL2_image.lib;SDL2_ttf.lib;SDL2_mixer.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(SDL2Root)\lib\x64\SDL2.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SDL2ImageRoot)\lib\x64\SDL2_image.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SDL2TtfRoot)\lib\x64\SDL2_ttf.dll" "$(OutDir)"&#x0D;&#x0A;copy /Y "$(SDL2MixerRoot)\lib\x64\SDL2_mixer.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\ai\AIPlayer.cpp" />
+    <ClCompile Include="src\ai\AIWorker.cpp" />
+    <ClCompile Include="src\game\FileHandling.cpp" />
+    <ClCompile Include="src\game\Model.cpp" />
+    <ClCompile Include="src\sdl\App.cpp" />
+    <ClCompile Include="src\sdl\AudioManager.cpp" />
+    <ClCompile Include="src\sdl\Fade.cpp" />
+    <ClCompile Include="src\sdl\HarvestResult.cpp" />
+    <ClCompile Include="src\sdl\Particle.cpp" />
+    <ClCompile Include="src\sdl\Renderer.cpp" />
+    <ClCompile Include="src\sdl\UIManager.cpp" />
+    <ClCompile Include="src\tests\SelfTest.cpp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ClInclude Include="include\ai\AIPlayer.h" />
+    <ClInclude Include="include\ai\AIWorker.h" />
+    <ClInclude Include="include\game\FileHandling.h" />
+    <ClInclude Include="include\game\GameDef.h" />
+    <ClInclude Include="include\game\Model.h" />
+    <ClInclude Include="include\sdl\App.h" />
+    <ClInclude Include="include\sdl\AudioManager.h" />
+    <ClInclude Include="include\sdl\DesignTokens.h" />
+    <ClInclude Include="include\sdl\Easing.h" />
+    <ClInclude Include="include\sdl\Fade.h" />
+    <ClInclude Include="include\sdl\HarvestResult.h" />
+    <ClInclude Include="include\sdl\Particle.h" />
+    <ClInclude Include="include\sdl\Renderer.h" />
+    <ClInclude Include="include\sdl\UIManager.h" />
+    <ClInclude Include="include\tests\SelfTest.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

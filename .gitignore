@@ -1,58 +1,39 @@
-# ================================================================
-#  .gitignore — CaroGame SDL2 (Gomoku)
-#  Chỉ push source code + assets + docs
-#  Loại bỏ: build output, user settings, cache, raw asset packs
-# ================================================================
+# Visual Studio user/cache files
+.vs/
+.vscode/
+*.vcxproj.user
+*.suo
+*.user
+*.aps
 
-# ── Build output ────────────────────────────────────────────────
+# Build intermediates
+build/
 x64/
 X64/
 Debug/
-Release/
-*.exe
-*.pdb
 *.obj
+*.pdb
 *.idb
 *.ilk
-*.lib
 *.exp
-*.dll
 
-# ── Visual Studio user-specific (không share) ───────────────────
-.vs/
-*.vcxproj.user
-*.aps
-
-# ── VS Code ─────────────────────────────────────────────────────
-.vscode/
-
-# ── CMake ───────────────────────────────────────────────────────
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-
-# ── Game save data (user-generated) ─────────────────────────────
+# Runtime/user-generated data
 Saves/
 */Saves/
+*.log
 
-# ── Raw open-source asset packs (quá lớn, không phải code) ──────
-source_assets/
-
-# ── Demo / Screenshots cá nhân ──────────────────────────────────
-Demo/
-
-# ── Generated log files ─────────────────────────────────────────
-Log/*.log
-
-# ── Private AI config ───────────────────────────────────────────
+# Local assistant/tooling state
+.agents/
+.codex/
 .claude/
+.mcp.json
+tmp/
+outputs/
 
-# ── Thư mục tạm ─────────────────────────────────────────────────
-tham kh*o/
-styles/
+# Packaging scratch files
+*.zip
 
-# ── OS specific ─────────────────────────────────────────────────
+# OS/editor noise
 .DS_Store
 Thumbs.db
 *.swp

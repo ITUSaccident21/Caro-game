@@ -1,73 +1,103 @@
-# Co Caro — Gomoku
+# Berry Grove - Caro/Gomoku SDL2
 
-A polished Gomoku (5-in-a-row) board game built with **C++ and SDL2**.
+Final project for the "Co so Lap trinh" course.
 
-## Features
+Berry Grove is a 12x12 Caro/Gomoku game written in C++17 and SDL2. The game supports local PvP, PvE with AI, save/load, sound effects, animated UI, and a cozy berry garden theme.
 
-- **PvP & PvE** — Play against a friend or an AI opponent
-- **Minimax AI** with Alpha-Beta Pruning, Move Ordering, and Time Limiting (Easy / Medium / Hard)
-- **Cozy pixel art** visual style inspired by Stardew Valley
-- **Character animation** — Characters walk to cells and place pieces
-- **WinEffect pipeline** — GLOW → CONVERGE → ZOOM → ANNOUNCE
-- **Save / Load** — Binary file-based game persistence
-- **AI Benchmark system** — Performance logging per move
+## Submission Contents
 
-## Tech Stack
-
-| Component | Technology |
-|---|---|
-| Language | C++17 |
-| Graphics | SDL2 + SDL2_image + SDL2_ttf |
-| Audio | SDL2_mixer |
-| Build | Visual Studio 2022 |
-| AI | Minimax + Alpha-Beta Pruning |
-
-## Project Structure
-
-```
-CaroGame_SDL2/
-├── src/
-│   ├── ai/          AI player (Minimax, benchmark)
-│   ├── game/        Core logic (Model, FileHandling, GameDef)
-│   └── sdl/         Rendering, UI, Animation, Audio, WinEffect
-├── assets/
-│   ├── fonts/       Pixel art font (m5x7)
-│   ├── sprites/     Backgrounds, board skins, icons, characters
-│   └── sounds/      BGM and SFX
-├── docs/
-│   ├── architecture/  System design
-│   ├── decisions/     Decision Records (DR-001 to DR-007)
-│   ├── journal/       Development journal
-│   └── concepts/      Technical concepts
-├── CaroGameSDL2/    Visual Studio project files
-├── main.cpp
-└── CaroGameSDL2.slnx
+```text
+Submission/
+  src/                         C++ source files
+  include/                     Header files
+  assets/                      Runtime game assets
+  external/                    SDL2 headers, x64 import libs, and DLLs
+  docs/
+    24120472_TruongHueTri_Report.pdf
+    24120472_TruongHueTri_Presentation.pptx
+  Release/
+    CaroGame.exe
+    SDL2*.dll
+    assets/
+  CaroGameSubmission.sln       Visual Studio 2022 solution
+  CaroGameSubmission.vcxproj   Visual Studio C++ project
+  Makefile
 ```
 
-## Building
+## Run Without Building
 
-Requires SDL2 libraries (SDL2, SDL2_image, SDL2_ttf, SDL2_mixer).
-Open `CaroGameSDL2.slnx` in Visual Studio 2022 → Build Debug/x64.
+Open:
 
-## Controls
+```text
+Release\CaroGame.exe
+```
 
-| Key | Action |
-|---|---|
-| WASD / Mouse | Move cursor |
-| Enter / Click | Place piece |
-| ESC | Pause menu |
-| L | Save game |
-| T | Load game |
-| R | New session (after game ends) |
+The SDL2 DLL files and assets are included next to the executable.
 
-## AI Performance (after optimization)
+## Build on Visual Studio 2022
 
-| Difficulty | Depth | Avg Time |
-|---|---|---|
-| Easy | 2 | < 5ms |
-| Medium | 4 | < 100ms |
-| Hard | 6 | < 1500ms |
+Requirements:
 
----
+- Windows 10/11 x64
+- Visual Studio 2022 with "Desktop development with C++"
+- Windows 10/11 SDK
 
-*Coursework — Fundamental Software Development, ITUS 2026*
+Steps:
+
+1. Open `CaroGameSubmission.sln`.
+2. Select `Release | x64`.
+3. Choose `Build > Build Solution`.
+4. Run `Release\CaroGame.exe`.
+
+The project uses only relative library paths:
+
+```text
+$(ProjectDir)external\SDL2
+$(ProjectDir)external\SDL2_image
+$(ProjectDir)external\SDL2_ttf
+$(ProjectDir)external\SDL2_mixer
+```
+
+No SDL2 installation is required on the grading machine. The post-build step copies the required SDL2 DLL files from `external` into `Release`.
+
+## Self-Test
+
+The self-test source is included in `src/tests/` and `include/tests/`. It is not run during normal gameplay; it only runs when the executable receives the `--selftest` argument.
+
+After building, run:
+
+```text
+Release\CaroGame.exe --selftest
+```
+
+Expected result:
+
+```text
+72/72 checks passed
+SELFTEST: ALL PASS
+```
+
+## Main Features
+
+- PvP on the same machine
+- PvE against AI with three difficulty levels
+- Win/draw detection
+- Save/load binary game state
+- Fullscreen 1920x1080 layout with letterboxing
+- Berry Grove themed UI and gameplay assets
+- Sound effects and optional background music hooks
+- Automated model, save/load, and AI self-tests
+
+## Libraries
+
+Bundled in `external/`:
+
+| Library | Purpose | License |
+| --- | --- | --- |
+| SDL2 | Window, renderer, input | zlib |
+| SDL2_image | PNG loading | zlib |
+| SDL2_ttf | Font rendering | zlib |
+| SDL2_mixer | Audio playback | zlib |
+| Baloo 2 | UI font | SIL Open Font License |
+
+The original license/readme files for SDL2 libraries are included in each `external/<library>/` directory.
